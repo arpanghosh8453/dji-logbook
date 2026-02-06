@@ -1,0 +1,624 @@
+//! Database module for DuckDB connection and schema management.
+//!
+//! This module handles:
+//! - DuckDB connection initialization in the app data directory
+//! - Schema creation for flights and telemetry tables
+//! - Optimized bulk inserts using Appender
+//! - Downsampled query retrieval for large datasets
+
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+use duckdb::{params, Appender, Connection, Result as DuckResult};
+use thiserror::Error;
+
+use crate::models::{Flight, FlightMetadata, TelemetryPoint, TelemetryRecord};
+
+/// Custom error types for database operations
+#[derive(Error, Debug)]
+pub enum DatabaseError {
+    #[error("DuckDB error: {0}")]
+    DuckDb(#[from] duckdb::Error),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Failed to get app data directory")]
+    AppDataDirNotFound,
+
+    #[error("Database not initialized")]
+    NotInitialized,
+
+    #[error("Flight not found: {0}")]
+    FlightNotFound(i64),
+}
+
+/// Thread-safe database manager
+pub struct Database {
+    conn: Mutex<Connection>,
+    pub data_dir: PathBuf,
+}
+
+impl Database {
+    /// Initialize the database in the app data directory.
+    ///
+    /// Creates the following directory structure:
+    /// ```
+    /// {app_data_dir}/
+    /// ├── flights.db       # DuckDB database file
+    /// ├── raw_logs/        # Original log files
+    /// └── keychains/       # Cached decryption keys
+    /// ```
+    pub fn new(app_data_dir: PathBuf) -> Result<Self, DatabaseError> {
+        // Ensure directory structure exists
+        fs::create_dir_all(&app_data_dir)?;
+        fs::create_dir_all(app_data_dir.join("raw_logs"))?;
+        fs::create_dir_all(app_data_dir.join("keychains"))?;
+
+        let db_path = app_data_dir.join("flights.db");
+
+        log::info!("Initializing DuckDB at: {:?}", db_path);
+
+        // Open or create the database
+        let conn = Connection::open(&db_path)?;
+
+        // Configure DuckDB for optimal performance
+        Self::configure_connection(&conn)?;
+
+        let db = Self {
+            conn: Mutex::new(conn),
+            data_dir: app_data_dir,
+        };
+
+        // Initialize schema
+        db.init_schema()?;
+
+        Ok(db)
+    }
+
+    /// Configure DuckDB connection for optimal analytical performance
+    fn configure_connection(conn: &Connection) -> DuckResult<()> {
+        // Memory settings for better performance with large datasets
+        conn.execute_batch(
+            r#"
+            SET memory_limit = '2GB';
+            SET threads = 4;
+            SET enable_progress_bar = false;
+            "#,
+        )?;
+        Ok(())
+    }
+
+    /// Initialize the database schema with optimized tables
+    fn init_schema(&self) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute_batch(
+            r#"
+            -- ============================================================
+            -- FLIGHTS TABLE: Stores metadata for each imported flight log
+            -- ============================================================
+            CREATE TABLE IF NOT EXISTS flights (
+                id              BIGINT PRIMARY KEY,
+                file_name       VARCHAR NOT NULL,
+                file_hash       VARCHAR UNIQUE,          -- SHA256 to prevent duplicates
+                drone_model     VARCHAR,
+                drone_serial    VARCHAR,
+                start_time      TIMESTAMP WITH TIME ZONE,
+                end_time        TIMESTAMP WITH TIME ZONE,
+                duration_secs   DOUBLE,
+                total_distance  DOUBLE,                  -- Total distance in meters
+                max_altitude    DOUBLE,                  -- Max altitude in meters
+                max_speed       DOUBLE,                  -- Max speed in m/s
+                home_lat        DOUBLE,
+                home_lon        DOUBLE,
+                point_count     INTEGER,                 -- Number of telemetry points
+                imported_at     TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                notes           VARCHAR
+            );
+
+            -- Index for sorting by flight date
+            CREATE INDEX IF NOT EXISTS idx_flights_start_time 
+                ON flights(start_time DESC);
+
+            -- ============================================================
+            -- TELEMETRY TABLE: Time-series data for each flight
+            -- Optimized for range queries on timestamp
+            -- ============================================================
+            CREATE TABLE IF NOT EXISTS telemetry (
+                flight_id       BIGINT NOT NULL,
+                timestamp_ms    BIGINT NOT NULL,         -- Milliseconds since flight start
+                
+                -- Position
+                latitude        DOUBLE,
+                longitude       DOUBLE,
+                altitude        DOUBLE,                  -- Relative altitude in meters
+                altitude_abs    DOUBLE,                  -- Absolute altitude (MSL)
+                
+                -- Velocity
+                speed           DOUBLE,                  -- Ground speed in m/s
+                velocity_x      DOUBLE,                  -- North velocity
+                velocity_y      DOUBLE,                  -- East velocity  
+                velocity_z      DOUBLE,                  -- Down velocity
+                
+                -- Orientation (Euler angles in degrees)
+                pitch           DOUBLE,
+                roll            DOUBLE,
+                yaw             DOUBLE,
+                
+                -- Gimbal
+                gimbal_pitch    DOUBLE,
+                gimbal_roll     DOUBLE,
+                gimbal_yaw      DOUBLE,
+                
+                -- Power
+                battery_percent INTEGER,
+                battery_voltage DOUBLE,
+                battery_current DOUBLE,
+                battery_temp    DOUBLE,
+                
+                -- Flight status
+                flight_mode     VARCHAR,
+                gps_signal      INTEGER,
+                satellites      INTEGER,
+                
+                -- RC
+                rc_signal       INTEGER,
+                
+                -- Composite primary key for efficient range queries
+                PRIMARY KEY (flight_id, timestamp_ms)
+            );
+
+            -- Index for time-range queries within a flight
+            CREATE INDEX IF NOT EXISTS idx_telemetry_flight_time 
+                ON telemetry(flight_id, timestamp_ms);
+
+            -- ============================================================
+            -- KEYCHAIN TABLE: Store cached decryption keys for V13+ logs
+            -- ============================================================
+            CREATE TABLE IF NOT EXISTS keychains (
+                serial_number   VARCHAR PRIMARY KEY,
+                encryption_key  VARCHAR NOT NULL,
+                fetched_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+            "#,
+        )?;
+
+        log::info!("Database schema initialized successfully");
+        Ok(())
+    }
+
+    /// Get the path to the raw_logs directory
+    pub fn raw_logs_dir(&self) -> PathBuf {
+        self.data_dir.join("raw_logs")
+    }
+
+    /// Get the path to the keychains directory
+    pub fn keychains_dir(&self) -> PathBuf {
+        self.data_dir.join("keychains")
+    }
+
+    /// Generate a new unique flight ID using timestamp + random
+    pub fn generate_flight_id(&self) -> i64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        // Use lower bits for uniqueness
+        timestamp % 1_000_000_000_000
+    }
+
+    /// Insert flight metadata and return the flight ID
+    pub fn insert_flight(&self, flight: &FlightMetadata) -> Result<i64, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            r#"
+            INSERT INTO flights (
+                id, file_name, file_hash, drone_model, drone_serial,
+                start_time, end_time, duration_secs, total_distance,
+                max_altitude, max_speed, home_lat, home_lon, point_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+            params![
+                flight.id,
+                flight.file_name,
+                flight.file_hash,
+                flight.drone_model,
+                flight.drone_serial,
+                flight.start_time.map(|t| t.to_rfc3339()),
+                flight.end_time.map(|t| t.to_rfc3339()),
+                flight.duration_secs,
+                flight.total_distance,
+                flight.max_altitude,
+                flight.max_speed,
+                flight.home_lat,
+                flight.home_lon,
+                flight.point_count,
+            ],
+        )?;
+
+        log::info!("Inserted flight with ID: {}", flight.id);
+        Ok(flight.id)
+    }
+
+    /// Bulk insert telemetry data using DuckDB's Appender for maximum performance
+    ///
+    /// This is significantly faster than individual INSERT statements for large datasets.
+    pub fn bulk_insert_telemetry(
+        &self,
+        flight_id: i64,
+        points: &[TelemetryPoint],
+    ) -> Result<usize, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+
+        // Use DuckDB Appender for high-performance bulk inserts
+        let mut appender: Appender = conn.appender("telemetry")?;
+
+        for point in points {
+            appender.append_row(params![
+                flight_id,
+                point.timestamp_ms,
+                point.latitude,
+                point.longitude,
+                point.altitude,
+                point.altitude_abs,
+                point.speed,
+                point.velocity_x,
+                point.velocity_y,
+                point.velocity_z,
+                point.pitch,
+                point.roll,
+                point.yaw,
+                point.gimbal_pitch,
+                point.gimbal_roll,
+                point.gimbal_yaw,
+                point.battery_percent,
+                point.battery_voltage,
+                point.battery_current,
+                point.battery_temp,
+                point.flight_mode.as_deref(),
+                point.gps_signal,
+                point.satellites,
+                point.rc_signal,
+            ])?;
+        }
+
+        // Flush the appender
+        appender.flush()?;
+
+        log::info!(
+            "Bulk inserted {} telemetry points for flight {}",
+            points.len(),
+            flight_id
+        );
+        Ok(points.len())
+    }
+
+    /// Get all flights metadata (for the flight list sidebar)
+    pub fn get_all_flights(&self) -> Result<Vec<Flight>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT 
+                id, file_name, drone_model, drone_serial,
+                CAST(start_time AS VARCHAR) AS start_time,
+                duration_secs, total_distance,
+                max_altitude, max_speed, point_count
+            FROM flights
+            ORDER BY start_time DESC
+            "#,
+        )?;
+
+        let flights = stmt
+            .query_map([], |row| {
+                Ok(Flight {
+                    id: row.get(0)?,
+                    file_name: row.get(1)?,
+                    drone_model: row.get(2)?,
+                    drone_serial: row.get(3)?,
+                    start_time: row.get(4)?,
+                    duration_secs: row.get(5)?,
+                    total_distance: row.get(6)?,
+                    max_altitude: row.get(7)?,
+                    max_speed: row.get(8)?,
+                    point_count: row.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(flights)
+    }
+
+    /// Get flight telemetry with automatic downsampling for large datasets.
+    ///
+    /// Strategy:
+    /// - If points < 5000: return raw data
+    /// - If points >= 5000: group by 1-second intervals, averaging values
+    /// - This keeps the frontend responsive while preserving data trends
+    pub fn get_flight_telemetry(
+        &self,
+        flight_id: i64,
+        max_points: Option<usize>,
+    ) -> Result<Vec<TelemetryRecord>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let max_points = max_points.unwrap_or(5000);
+
+        // First, get the point count for this flight
+        let point_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM telemetry WHERE flight_id = ?",
+            params![flight_id],
+            |row| row.get(0),
+        )?;
+
+        if point_count == 0 {
+            return Err(DatabaseError::FlightNotFound(flight_id));
+        }
+
+        let records = if point_count as usize <= max_points {
+            // Return raw data - no downsampling needed
+            log::debug!(
+                "Returning {} raw telemetry points for flight {}",
+                point_count,
+                flight_id
+            );
+            self.query_raw_telemetry(&conn, flight_id)?
+        } else {
+            // Downsample using 1-second interval averaging
+            log::debug!(
+                "Downsampling {} points to ~{} for flight {}",
+                point_count,
+                max_points,
+                flight_id
+            );
+            self.query_downsampled_telemetry(&conn, flight_id, max_points)?
+        };
+
+        Ok(records)
+    }
+
+    /// Query raw telemetry without any downsampling
+    fn query_raw_telemetry(
+        &self,
+        conn: &Connection,
+        flight_id: i64,
+    ) -> Result<Vec<TelemetryRecord>, DatabaseError> {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT 
+                timestamp_ms,
+                latitude,
+                longitude, 
+                altitude,
+                speed,
+                battery_percent,
+                pitch,
+                roll,
+                yaw,
+                satellites,
+                flight_mode
+            FROM telemetry
+            WHERE flight_id = ?
+            ORDER BY timestamp_ms ASC
+            "#,
+        )?;
+
+        let records = stmt
+            .query_map(params![flight_id], |row| {
+                Ok(TelemetryRecord {
+                    timestamp_ms: row.get(0)?,
+                    latitude: row.get(1)?,
+                    longitude: row.get(2)?,
+                    altitude: row.get(3)?,
+                    speed: row.get(4)?,
+                    battery_percent: row.get(5)?,
+                    pitch: row.get(6)?,
+                    roll: row.get(7)?,
+                    yaw: row.get(8)?,
+                    satellites: row.get(9)?,
+                    flight_mode: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(records)
+    }
+
+    /// Query telemetry with downsampling using DuckDB's analytical capabilities
+    ///
+    /// Groups data into time buckets and averages values for smooth visualization
+    fn query_downsampled_telemetry(
+        &self,
+        conn: &Connection,
+        flight_id: i64,
+        target_points: usize,
+    ) -> Result<Vec<TelemetryRecord>, DatabaseError> {
+        // Calculate the bucket size in milliseconds based on flight duration and target points
+        let (min_ts, max_ts): (i64, i64) = conn.query_row(
+            "SELECT MIN(timestamp_ms), MAX(timestamp_ms) FROM telemetry WHERE flight_id = ?",
+            params![flight_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        let duration_ms = max_ts - min_ts;
+        let bucket_size_ms = (duration_ms / target_points as i64).max(1000); // At least 1 second
+
+        let mut stmt = conn.prepare(
+            r#"
+            WITH bucketed AS (
+                SELECT 
+                    (timestamp_ms / ?) * ? AS bucket_ts,
+                    AVG(latitude) AS latitude,
+                    AVG(longitude) AS longitude,
+                    AVG(altitude) AS altitude,
+                    AVG(speed) AS speed,
+                    AVG(battery_percent)::INTEGER AS battery_percent,
+                    AVG(pitch) AS pitch,
+                    AVG(roll) AS roll,
+                    AVG(yaw) AS yaw,
+                    MODE(satellites) AS satellites,
+                    MODE(flight_mode) AS flight_mode
+                FROM telemetry
+                WHERE flight_id = ?
+                GROUP BY bucket_ts
+                ORDER BY bucket_ts ASC
+            )
+            SELECT * FROM bucketed
+            "#,
+        )?;
+
+        let records = stmt
+            .query_map(params![bucket_size_ms, bucket_size_ms, flight_id], |row| {
+                Ok(TelemetryRecord {
+                    timestamp_ms: row.get(0)?,
+                    latitude: row.get(1)?,
+                    longitude: row.get(2)?,
+                    altitude: row.get(3)?,
+                    speed: row.get(4)?,
+                    battery_percent: row.get(5)?,
+                    pitch: row.get(6)?,
+                    roll: row.get(7)?,
+                    yaw: row.get(8)?,
+                    satellites: row.get(9)?,
+                    flight_mode: row.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(records)
+    }
+
+    /// Get GPS track data optimized for map visualization
+    pub fn get_flight_track(
+        &self,
+        flight_id: i64,
+        max_points: Option<usize>,
+    ) -> Result<Vec<[f64; 3]>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let max_points = max_points.unwrap_or(2000);
+
+        // Get total count
+        let point_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM telemetry WHERE flight_id = ?",
+            params![flight_id],
+            |row| row.get(0),
+        )?;
+
+        // Calculate skip factor for downsampling
+        let skip_factor = ((point_count as usize) / max_points).max(1);
+
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT longitude, latitude, altitude
+            FROM (
+                SELECT 
+                    longitude, 
+                    latitude, 
+                    altitude,
+                    ROW_NUMBER() OVER (ORDER BY timestamp_ms) AS rn
+                FROM telemetry
+                WHERE flight_id = ? 
+                  AND latitude IS NOT NULL 
+                  AND longitude IS NOT NULL
+            )
+            WHERE rn % ? = 0
+            ORDER BY rn
+            "#,
+        )?;
+
+        let track = stmt
+            .query_map(params![flight_id, skip_factor as i64], |row| {
+                Ok([row.get::<_, f64>(0)?, row.get::<_, f64>(1)?, row.get::<_, f64>(2)?])
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(track)
+    }
+
+    /// Delete a flight and all associated telemetry data
+    pub fn delete_flight(&self, flight_id: i64) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            "DELETE FROM telemetry WHERE flight_id = ?",
+            params![flight_id],
+        )?;
+        conn.execute("DELETE FROM flights WHERE id = ?", params![flight_id])?;
+
+        log::info!("Deleted flight {}", flight_id);
+        Ok(())
+    }
+
+    /// Check if a file has already been imported (by hash)
+    pub fn is_file_imported(&self, file_hash: &str) -> Result<bool, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM flights WHERE file_hash = ?",
+            params![file_hash],
+            |row| row.get(0),
+        )?;
+
+        Ok(count > 0)
+    }
+
+    /// Store an encryption key for a drone serial number
+    pub fn store_keychain(&self, serial: &str, key: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            r#"
+            INSERT INTO keychains (serial_number, encryption_key)
+            VALUES (?, ?)
+            ON CONFLICT (serial_number) DO UPDATE SET 
+                encryption_key = excluded.encryption_key,
+                fetched_at = CURRENT_TIMESTAMP
+            "#,
+            params![serial, key],
+        )?;
+
+        Ok(())
+    }
+
+    /// Retrieve a cached encryption key
+    pub fn get_keychain(&self, serial: &str) -> Result<Option<String>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+
+        let result = conn.query_row(
+            "SELECT encryption_key FROM keychains WHERE serial_number = ?",
+            params![serial],
+            |row| row.get::<_, String>(0),
+        );
+
+        match result {
+            Ok(key) => Ok(Some(key)),
+            Err(duckdb::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_database_initialization() {
+        let temp_dir = tempdir().unwrap();
+        let db = Database::new(temp_dir.path().to_path_buf()).unwrap();
+
+        // Verify directories were created
+        assert!(temp_dir.path().join("raw_logs").exists());
+        assert!(temp_dir.path().join("keychains").exists());
+        assert!(temp_dir.path().join("flights.db").exists());
+
+        // Verify we can get flights (empty)
+        let flights = db.get_all_flights().unwrap();
+        assert!(flights.is_empty());
+    }
+}

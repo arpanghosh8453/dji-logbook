@@ -1,0 +1,70 @@
+[package]
+name = "dji-logviewer"
+version = "0.1.0"
+description = "A high-performance DJI Drone Flight Log Analyzer"
+authors = ["DJI Logviewer Contributors"]
+edition = "2021"
+rust-version = "1.70"
+
+[lib]
+name = "dji_logviewer_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+base64 = "0.22"
+
+[dependencies]
+# Tauri v2 Core
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-http = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# DuckDB - Embedded analytical database (bundled = no system install required)
+duckdb = { version = "1.0", features = ["bundled", "json", "parquet"] }
+
+# DJI Log Parser
+dji-log-parser = "0.5.7"
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# Error Handling
+thiserror = "1"
+anyhow = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Date/Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID generation for unique identifiers
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# HTTP client for DJI API key fetching
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# SHA256 hashing for file deduplication
+sha2 = "0.10"
+
+# File utilities
+dirs = "5"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "z"
+strip = true

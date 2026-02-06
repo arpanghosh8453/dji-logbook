@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+dist-ssr/
+*.local
+
+# Rust/Cargo
+target/
+Cargo.lock
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# DJI API Key - NEVER COMMIT
+.dji-api-key
+secrets/
+*.key
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# Tauri
+src-tauri/target/
+src-tauri/WixTools/
+src-tauri/icons/
+
+# Generated types
+src-tauri/bindings/

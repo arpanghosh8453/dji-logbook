@@ -1,0 +1,127 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a2e;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #4a4e69;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6a6e89;
+}
+
+/* Base layer overrides */
+@layer base {
+  * {
+    @apply border-gray-700;
+  }
+
+  body {
+    @apply bg-dji-dark text-gray-100;
+  }
+}
+
+/* Component layer */
+@layer components {
+  .btn-primary {
+    @apply bg-dji-primary hover:bg-blue-500 text-white font-medium 
+           py-2 px-4 rounded-lg transition-colors duration-200
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-dji-surface hover:bg-gray-700 text-white font-medium 
+           py-2 px-4 rounded-lg transition-colors duration-200
+           border border-gray-600;
+  }
+
+  .card {
+    @apply bg-dji-surface rounded-xl border border-gray-700/50 
+           shadow-lg shadow-black/20;
+  }
+
+  .input {
+    @apply bg-dji-dark border border-gray-600 rounded-lg px-4 py-2
+           text-gray-100 placeholder-gray-500
+           focus:outline-none focus:ring-2 focus:ring-dji-primary/50 
+           focus:border-dji-primary transition-all;
+  }
+
+  .stat-card {
+    @apply card p-4 flex flex-col gap-1;
+  }
+
+  .stat-value {
+    @apply text-2xl font-bold text-white;
+  }
+
+  .stat-label {
+    @apply text-sm text-gray-400;
+  }
+}
+
+/* MapLibre GL styling */
+.maplibregl-ctrl-group {
+  background: #16213e !important;
+  border: 1px solid #4a4e69 !important;
+}
+
+.maplibregl-ctrl-group button {
+  background-color: transparent !important;
+}
+
+.maplibregl-ctrl-group button:hover {
+  background-color: #2a2a4e !important;
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid #4a4e69 !important;
+}
+
+/* ECharts tooltip customization */
+.echarts-tooltip {
+  background: #16213e !important;
+  border: 1px solid #4a4e69 !important;
+  border-radius: 8px !important;
+}
+
+/* Loading spinner */
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Drag and drop zone */
+.drop-zone {
+  @apply border-2 border-dashed border-gray-600 rounded-xl 
+         transition-all duration-200 cursor-pointer;
+}
+
+.drop-zone:hover,
+.drop-zone.active {
+  @apply border-dji-primary bg-dji-primary/10;
+}
+
+.drop-zone.active {
+  @apply border-dji-accent bg-dji-accent/10;
+}
