@@ -39,5 +39,17 @@ export default defineConfig({
     // Don't minify for debug builds
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      onwarn(warning, warn) {
+        if (
+          warning.message.includes('spawn') &&
+          warning.message.includes('child-process-proxy')
+        ) {
+          return
+        }
+        warn(warning)
+      },
+    },
   },
 })
