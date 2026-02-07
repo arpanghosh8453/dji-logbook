@@ -706,12 +706,12 @@ impl Database {
 
         let mut stmt = conn.prepare(
             r#"
-            SELECT longitude, latitude, altitude
+            SELECT longitude, latitude, altitude_value
             FROM (
                 SELECT 
                     longitude, 
-                    latitude, 
-                    altitude,
+                    latitude,
+                    COALESCE(height, vps_height, altitude) AS altitude_value,
                     ROW_NUMBER() OVER (ORDER BY timestamp_ms) AS rn
                 FROM telemetry
                 WHERE flight_id = ? 

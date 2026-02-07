@@ -4,9 +4,11 @@
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import Map, { Source, Layer, NavigationControl, Marker } from 'react-map-gl/maplibre';
-import type { LineLayer, MapRef } from 'react-map-gl/maplibre';
+import Map, { NavigationControl, Marker } from 'react-map-gl/maplibre';
+import type { MapRef } from 'react-map-gl/maplibre';
 import type { StyleSpecification } from 'maplibre-gl';
+import { PathLayer } from '@deck.gl/layers';
+import DeckGL from '@deck.gl/react';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { getTrackCenter, calculateBounds } from '@/lib/utils';
 
@@ -49,6 +51,13 @@ const TERRAIN_SOURCE = {
   maxzoom: 14,
 } as const;
 
+const getSessionBool = (key: string, fallback: boolean) => {
+  if (typeof window === 'undefined') return fallback;
+  const stored = window.sessionStorage.getItem(key);
+  if (stored === null) return fallback;
+  return stored === 'true';
+};
+
 export function FlightMap({ track, themeMode }: FlightMapProps) {
   const [viewState, setViewState] = useState({
     longitude: 0,
@@ -57,8 +66,8 @@ export function FlightMap({ track, themeMode }: FlightMapProps) {
     pitch: 45,
     bearing: 0,
   });
-  const [is3D, setIs3D] = useState(true);
-  const [isSatellite, setIsSatellite] = useState(false);
+  const [is3D, setIs3D] = useState(() => getSessionBool('map:is3d', true));
+  const [isSatellite, setIsSatellite] = useState(() => getSessionBool('map:isSatellite', false));
   const mapRef = useRef<MapRef | null>(null);
 
   const resolvedTheme = useMemo(() => {
@@ -99,48 +108,65 @@ export function FlightMap({ track, themeMode }: FlightMapProps) {
     }
   }, [track]);
 
-  // Convert track to GeoJSON
-  const trackGeoJSON = useMemo(() => {
-    if (track.length === 0) return null;
+  const deckPathData = useMemo(() => {
+    if (track.length < 2) return [];
+    const segments: { path: [number, number, number][]; color: [number, number, number] }[] = [];
+    const startColor: [number, number, number] = [250, 204, 21];
+    const endColor: [number, number, number] = [239, 68, 68];
 
-    return {
-      type: 'Feature' as const,
-      properties: {},
-      geometry: {
-        type: 'LineString' as const,
-        coordinates: track,
-      },
-    };
-  }, [track]);
+    const toAlt = (altitude: number) => (is3D ? altitude : 0);
+
+    for (let i = 0; i < track.length - 1; i += 1) {
+      const t = i / Math.max(1, track.length - 2);
+      const color: [number, number, number] = [
+        Math.round(startColor[0] + (endColor[0] - startColor[0]) * t),
+        Math.round(startColor[1] + (endColor[1] - startColor[1]) * t),
+        Math.round(startColor[2] + (endColor[2] - startColor[2]) * t),
+      ];
+      const [lng1, lat1, alt1] = track[i];
+      const [lng2, lat2, alt2] = track[i + 1];
+      segments.push({
+        path: [
+          [lng1, lat1, toAlt(alt1)],
+          [lng2, lat2, toAlt(alt2)],
+        ],
+        color,
+      });
+    }
+
+    return segments;
+  }, [is3D, track]);
+
+  const deckLayers = useMemo(() => {
+    if (deckPathData.length === 0) return [];
+    return [
+      new PathLayer({
+        id: 'flight-path-3d',
+        data: deckPathData,
+        getPath: (d) => d.path,
+        getColor: (d) => d.color,
+        getWidth: 4,
+        widthUnits: 'pixels',
+        widthMinPixels: 4,
+        capRounded: true,
+        jointRounded: true,
+        billboard: true,
+        opacity: 1,
+        pickable: false,
+        parameters: {
+          depthTest: false,
+        },
+      }),
+    ];
+  }, [deckPathData]);
 
   // Start and end markers
   const startPoint = track[0];
   const endPoint = track[track.length - 1];
 
-  // Layer styles
-  const trackLayerStyle: LineLayer = {
-    id: 'flight-track',
-    type: 'line',
-    source: 'flight-track',
-    paint: {
-      'line-color': '#facc15',
-      'line-gradient': [
-        'interpolate',
-        ['linear'],
-        ['line-progress'],
-        0,
-        '#facc15',
-        1,
-        '#ef4444',
-      ],
-      'line-width': 3,
-      'line-opacity': 0.8,
-    },
-  };
-
-  const handleMove = useCallback(
-    (evt: { viewState: typeof viewState }) => {
-      setViewState(evt.viewState);
+  const handleMapMove = useCallback(
+    ({ viewState: nextViewState }: { viewState: typeof viewState }) => {
+      setViewState(nextViewState);
     },
     []
   );
@@ -185,6 +211,18 @@ export function FlightMap({ track, themeMode }: FlightMapProps) {
   }, [disableTerrain, enableTerrain, is3D]);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('map:is3d', String(is3D));
+    }
+  }, [is3D]);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('map:isSatellite', String(isSatellite));
+    }
+  }, [isSatellite]);
+
+  useEffect(() => {
     if (is3D) {
       enableTerrain();
     }
@@ -199,66 +237,70 @@ export function FlightMap({ track, themeMode }: FlightMapProps) {
   }
 
   return (
-    <Map
-      {...viewState}
-      onMove={handleMove}
-      style={{ width: '100%', height: '100%' }}
-      mapStyle={activeMapStyle}
-      attributionControl={false}
-      ref={mapRef}
-      onLoad={() => {
-        if (is3D) {
-          enableTerrain();
-        }
-      }}
-    >
-      <NavigationControl position="top-right" />
+    <div className="relative h-full w-full min-h-0">
+      <Map
+        {...viewState}
+        className="absolute inset-0"
+        style={{ width: '100%', height: '100%' }}
+        mapStyle={activeMapStyle}
+        attributionControl={false}
+        ref={mapRef}
+        onMove={handleMapMove}
+        onLoad={() => {
+          if (is3D) {
+            enableTerrain();
+          }
+        }}
+      >
+        <NavigationControl position="top-right" />
 
-      {/* Map Controls */}
-      <div className="absolute top-2 left-2 z-10 bg-dji-dark/80 border border-gray-700 rounded-xl px-3 py-2 space-y-2 shadow-lg">
-        <ToggleRow
-          label="3D Terrain"
-          checked={is3D}
-          onChange={setIs3D}
-        />
-        <ToggleRow
-          label="Satellite"
-          checked={isSatellite}
-          onChange={setIsSatellite}
-        />
-      </div>
+        {/* Map Controls */}
+        <div className="absolute top-2 left-2 z-10 bg-dji-dark/80 border border-gray-700 rounded-xl px-3 py-2 space-y-2 shadow-lg">
+          <ToggleRow
+            label="3D Terrain"
+            checked={is3D}
+            onChange={setIs3D}
+          />
+          <ToggleRow
+            label="Satellite"
+            checked={isSatellite}
+            onChange={setIsSatellite}
+          />
+        </div>
 
-      {/* Flight Track */}
-      {trackGeoJSON && (
-        <Source id="flight-track" type="geojson" data={trackGeoJSON} lineMetrics={true}>
-          <Layer {...trackLayerStyle} />
-        </Source>
-      )}
-
-      {/* Start Marker (Yellow) */}
-      {startPoint && (
-        <Marker longitude={startPoint[0]} latitude={startPoint[1]} anchor="center">
-          <div className="relative">
-            <div className="w-4 h-4 bg-yellow-400 rounded-full border-2 border-white shadow-lg" />
-            <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs bg-yellow-500 text-black px-1.5 py-0.5 rounded whitespace-nowrap">
-              Start
+        {/* Start Marker (Yellow) */}
+        {startPoint && (
+          <Marker longitude={startPoint[0]} latitude={startPoint[1]} anchor="center">
+            <div className="relative">
+              <div className="w-4 h-4 bg-yellow-400 rounded-full border-2 border-white shadow-lg" />
+              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs bg-yellow-500 text-black px-1.5 py-0.5 rounded whitespace-nowrap">
+                Start
+              </div>
             </div>
-          </div>
-        </Marker>
-      )}
+          </Marker>
+        )}
 
-      {/* End Marker (Red) */}
-      {endPoint && (
-        <Marker longitude={endPoint[0]} latitude={endPoint[1]} anchor="center">
-          <div className="relative">
-            <div className="w-4 h-4 bg-red-500 rounded-full border-2 border-white shadow-lg" />
-            <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs bg-red-500 text-white px-1.5 py-0.5 rounded whitespace-nowrap">
-              End
+        {/* End Marker (Red) */}
+        {endPoint && (
+          <Marker longitude={endPoint[0]} latitude={endPoint[1]} anchor="center">
+            <div className="relative">
+              <div className="w-4 h-4 bg-red-500 rounded-full border-2 border-white shadow-lg" />
+              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs bg-red-500 text-white px-1.5 py-0.5 rounded whitespace-nowrap">
+                End
+              </div>
             </div>
-          </div>
-        </Marker>
-      )}
-    </Map>
+          </Marker>
+        )}
+      </Map>
+
+      <DeckGL
+        viewState={viewState}
+        controller={false}
+        layers={deckLayers}
+        className="absolute inset-0"
+        style={{ width: '100%', height: '100%', pointerEvents: 'none' }}
+      />
+    </div>
   );
 }
 

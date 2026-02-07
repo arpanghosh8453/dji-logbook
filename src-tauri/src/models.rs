@@ -126,7 +126,7 @@ pub struct TelemetryRecord {
 pub struct FlightDataResponse {
     pub flight: Flight,
     pub telemetry: TelemetryData,
-    pub track: Vec<[f64; 3]>, // [lng, lat, alt] for map
+    pub track: Vec<[f64; 3]>, // [lng, lat, height] for map
 }
 
 /// Overview statistics across all flights

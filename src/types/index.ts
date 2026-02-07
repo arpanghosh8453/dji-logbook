@@ -51,7 +51,7 @@ export interface TelemetryData {
 export interface FlightDataResponse {
   flight: Flight;
   telemetry: TelemetryData;
-  /** GPS track: [lng, lat, alt][] */
+  /** GPS track: [lng, lat, height][] */
   track: [number, number, number][];
 }
 
