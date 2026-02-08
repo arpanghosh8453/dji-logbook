@@ -14,6 +14,8 @@ import { getTrackCenter, calculateBounds } from '@/lib/utils';
 
 interface FlightMapProps {
   track: [number, number, number][]; // [lng, lat, alt][]
+  homeLat?: number | null;
+  homeLon?: number | null;
   themeMode: 'system' | 'dark' | 'light';
 }
 
@@ -58,7 +60,59 @@ const getSessionBool = (key: string, fallback: boolean) => {
   return stored === 'true';
 };
 
-export function FlightMap({ track, themeMode }: FlightMapProps) {
+// ─── Catmull-Rom spline smoothing ───────────────────────────────────────────
+// Interpolates between GPS points to produce a smooth, natural curve.
+// `resolution` controls how many sub-points to insert between each pair (higher = smoother).
+function smoothTrack(
+  points: [number, number, number][],
+  resolution = 4
+): [number, number, number][] {
+  if (points.length < 3) return points;
+
+  const result: [number, number, number][] = [];
+  const n = points.length;
+
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = points[Math.max(i - 1, 0)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(i + 2, n - 1)];
+
+    for (let step = 0; step < resolution; step++) {
+      const t = step / resolution;
+      const t2 = t * t;
+      const t3 = t2 * t;
+
+      // Catmull-Rom coefficients
+      const lng =
+        0.5 *
+        (2 * p1[0] +
+          (-p0[0] + p2[0]) * t +
+          (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 +
+          (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
+      const lat =
+        0.5 *
+        (2 * p1[1] +
+          (-p0[1] + p2[1]) * t +
+          (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 +
+          (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+      const alt =
+        0.5 *
+        (2 * p1[2] +
+          (-p0[2] + p2[2]) * t +
+          (2 * p0[2] - 5 * p1[2] + 4 * p2[2] - p3[2]) * t2 +
+          (-p0[2] + 3 * p1[2] - 3 * p2[2] + p3[2]) * t3);
+
+      result.push([lng, lat, alt]);
+    }
+  }
+
+  // Always include the final point
+  result.push(points[n - 1]);
+  return result;
+}
+
+export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps) {
   const [viewState, setViewState] = useState({
     longitude: 0,
     latitude: 0,
@@ -108,23 +162,30 @@ export function FlightMap({ track, themeMode }: FlightMapProps) {
     }
   }, [track]);
 
+  // Smooth the raw GPS track using Catmull-Rom spline interpolation
+  const smoothedTrack = useMemo(() => {
+    if (track.length < 3) return track;
+    // Resolution 4 = insert 4 points between each GPS sample → much smoother curves
+    return smoothTrack(track, 4);
+  }, [track]);
+
   const deckPathData = useMemo(() => {
-    if (track.length < 2) return [];
+    if (smoothedTrack.length < 2) return [];
     const segments: { path: [number, number, number][]; color: [number, number, number] }[] = [];
     const startColor: [number, number, number] = [250, 204, 21];
     const endColor: [number, number, number] = [239, 68, 68];
 
     const toAlt = (altitude: number) => (is3D ? altitude : 0);
 
-    for (let i = 0; i < track.length - 1; i += 1) {
-      const t = i / Math.max(1, track.length - 2);
+    for (let i = 0; i < smoothedTrack.length - 1; i += 1) {
+      const t = i / Math.max(1, smoothedTrack.length - 2);
       const color: [number, number, number] = [
         Math.round(startColor[0] + (endColor[0] - startColor[0]) * t),
         Math.round(startColor[1] + (endColor[1] - startColor[1]) * t),
         Math.round(startColor[2] + (endColor[2] - startColor[2]) * t),
       ];
-      const [lng1, lat1, alt1] = track[i];
-      const [lng2, lat2, alt2] = track[i + 1];
+      const [lng1, lat1, alt1] = smoothedTrack[i];
+      const [lng2, lat2, alt2] = smoothedTrack[i + 1];
       segments.push({
         path: [
           [lng1, lat1, toAlt(alt1)],
@@ -135,11 +196,30 @@ export function FlightMap({ track, themeMode }: FlightMapProps) {
     }
 
     return segments;
-  }, [is3D, track]);
+  }, [is3D, smoothedTrack]);
 
   const deckLayers = useMemo(() => {
     if (deckPathData.length === 0) return [];
     return [
+      // Shadow / outline layer — wider, dark, semi-transparent, drawn first (underneath)
+      new PathLayer({
+        id: 'flight-path-shadow',
+        data: deckPathData,
+        getPath: (d) => d.path,
+        getColor: [0, 0, 0, 80],
+        getWidth: 10,
+        widthUnits: 'pixels',
+        widthMinPixels: 8,
+        capRounded: true,
+        jointRounded: true,
+        billboard: true,
+        opacity: 1,
+        pickable: false,
+        parameters: {
+          depthTest: false,
+        },
+      }),
+      // Main gradient path layer
       new PathLayer({
         id: 'flight-path-3d',
         data: deckPathData,
@@ -147,7 +227,7 @@ export function FlightMap({ track, themeMode }: FlightMapProps) {
         getColor: (d) => d.color,
         getWidth: 4,
         widthUnits: 'pixels',
-        widthMinPixels: 4,
+        widthMinPixels: 3,
         capRounded: true,
         jointRounded: true,
         billboard: true,
@@ -267,25 +347,50 @@ export function FlightMap({ track, themeMode }: FlightMapProps) {
           />
         </div>
 
-        {/* Start Marker (Yellow) */}
+        {/* Start Marker — pulsing yellow */}
         {startPoint && (
           <Marker longitude={startPoint[0]} latitude={startPoint[1]} anchor="center">
-            <div className="relative">
-              <div className="w-4 h-4 bg-yellow-400 rounded-full border-2 border-white shadow-lg" />
-              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs bg-yellow-500 text-black px-1.5 py-0.5 rounded whitespace-nowrap">
-                Start
+            <div className="relative flex items-center justify-center">
+              <div className="absolute w-7 h-7 bg-yellow-400/30 rounded-full animate-ping" />
+              <div className="w-4 h-4 bg-yellow-400 rounded-full border-2 border-white shadow-lg z-10" />
+              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[10px] font-semibold bg-yellow-500 text-black px-1.5 py-0.5 rounded shadow whitespace-nowrap z-10">
+                START
               </div>
             </div>
           </Marker>
         )}
 
-        {/* End Marker (Red) */}
+        {/* End Marker — red with landing icon */}
         {endPoint && (
           <Marker longitude={endPoint[0]} latitude={endPoint[1]} anchor="center">
-            <div className="relative">
-              <div className="w-4 h-4 bg-red-500 rounded-full border-2 border-white shadow-lg" />
-              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs bg-red-500 text-white px-1.5 py-0.5 rounded whitespace-nowrap">
-                End
+            <div className="relative flex items-center justify-center">
+              <div className="w-5 h-5 bg-red-500 rounded-full border-2 border-white shadow-lg flex items-center justify-center z-10">
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M5 2V8M3 6L5 8L7 6" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </div>
+              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[10px] font-semibold bg-red-500 text-white px-1.5 py-0.5 rounded shadow whitespace-nowrap z-10">
+                END
+              </div>
+            </div>
+          </Marker>
+        )}
+
+        {/* Home Marker — blue crosshair */}
+        {homeLat != null && homeLon != null && Math.abs(homeLat) > 0.000001 && (
+          <Marker longitude={homeLon} latitude={homeLat} anchor="center">
+            <div className="relative flex items-center justify-center">
+              <div className="w-5 h-5 rounded-full border-2 border-sky-400 bg-sky-400/20 flex items-center justify-center shadow-lg z-10">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <circle cx="6" cy="6" r="2" stroke="#38bdf8" strokeWidth="1.5" fill="none"/>
+                  <line x1="6" y1="0" x2="6" y2="4" stroke="#38bdf8" strokeWidth="1"/>
+                  <line x1="6" y1="8" x2="6" y2="12" stroke="#38bdf8" strokeWidth="1"/>
+                  <line x1="0" y1="6" x2="4" y2="6" stroke="#38bdf8" strokeWidth="1"/>
+                  <line x1="8" y1="6" x2="12" y2="6" stroke="#38bdf8" strokeWidth="1"/>
+                </svg>
+              </div>
+              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-[10px] font-semibold bg-sky-500 text-white px-1.5 py-0.5 rounded shadow whitespace-nowrap z-10">
+                HOME
               </div>
             </div>
           </Marker>

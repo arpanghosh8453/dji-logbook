@@ -273,7 +273,12 @@ export function Dashboard() {
                   <h2 className="font-semibold text-white">Flight Path</h2>
                 </div>
                 <div className="flex-1">
-                  <FlightMap track={currentFlightData!.track} themeMode={themeMode} />
+                  <FlightMap
+                    track={currentFlightData!.track}
+                    homeLat={currentFlightData!.flight.homeLat}
+                    homeLon={currentFlightData!.flight.homeLon}
+                    themeMode={themeMode}
+                  />
                 </div>
               </div>
             </div>
