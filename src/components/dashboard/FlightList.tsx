@@ -720,23 +720,6 @@ ${points}
             </>
           )}
         </div>
-        {/* Filtered count and Clear filters */}
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-gray-400">
-            {filteredFlights.length} flight(s) selected
-          </span>
-          <button
-            onClick={() => {
-              setDateRange(undefined);
-              setSelectedDrone('');
-              setSelectedBattery('');
-            }}
-            className="text-xs text-gray-400 hover:text-white"
-          >
-            Clear filters
-          </button>
-        </div>
-
         <div>
           <label className="block text-xs text-gray-400 mb-1">Drone</label>
           <select

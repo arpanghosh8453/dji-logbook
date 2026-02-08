@@ -141,7 +141,8 @@ impl<'a> LogParser<'a> {
         }
 
         // Extract telemetry points
-        let points = self.extract_telemetry(&frames);
+        let details_total_time_secs = parser.details.total_time as f64;
+        let points = self.extract_telemetry(&frames, details_total_time_secs);
 
         if points.is_empty() {
             return Err(ParserError::NoTelemetryData);
@@ -175,7 +176,13 @@ impl<'a> LogParser<'a> {
             battery_serial: self.extract_battery_serial(&parser),
             start_time: self.extract_start_time(&parser),
             end_time: self.extract_end_time(&parser),
-            duration_secs: Some(stats.duration_secs),
+            duration_secs: Some(
+                if details_total_time_secs > 0.0 {
+                    details_total_time_secs
+                } else {
+                    stats.duration_secs
+                }
+            ),
             total_distance: Some(stats.total_distance_m),
             max_altitude: Some(stats.max_altitude_m),
             max_speed: Some(stats.max_speed_ms),
@@ -207,9 +214,20 @@ impl<'a> LogParser<'a> {
     }
 
     /// Extract telemetry points from parsed frames
-    fn extract_telemetry(&self, frames: &[Frame]) -> Vec<TelemetryPoint> {
+    fn extract_telemetry(&self, frames: &[Frame], details_total_time_secs: f64) -> Vec<TelemetryPoint> {
         let mut points = Vec::with_capacity(frames.len());
         let mut timestamp_ms: i64 = 0;
+
+        // Check if any frame has a non-zero fly_time
+        let has_fly_time = frames.iter().any(|f| f.osd.fly_time > 0.0);
+
+        // When fly_time is unavailable, compute interval from header duration
+        // instead of assuming 100ms (10Hz), which inflates duration for high-rate logs
+        let fallback_interval_ms: i64 = if !has_fly_time && details_total_time_secs > 0.0 && !frames.is_empty() {
+            ((details_total_time_secs * 1000.0) / frames.len() as f64).round() as i64
+        } else {
+            100 // default 10Hz assumption
+        };
 
         for frame in frames {
             let osd = &frame.osd;
@@ -228,15 +246,26 @@ impl<'a> LogParser<'a> {
                 ..Default::default()
             };
 
-            point.latitude = Some(osd.latitude);
-            point.longitude = Some(osd.longitude);
+            // Filter out 0,0 GPS coordinates (no GPS lock yet)
+            // Keep the point for non-GPS data but set lat/lon to None
+            let has_gps_lock = !(osd.latitude.abs() < 1e-6 && osd.longitude.abs() < 1e-6);
+            if has_gps_lock {
+                point.latitude = Some(osd.latitude);
+                point.longitude = Some(osd.longitude);
+            }
+            // else: latitude/longitude remain None (from Default)
+
             point.altitude = Some(osd.altitude as f64);
             point.height = Some(osd.height as f64);
             point.vps_height = Some(osd.vps_height as f64);
-            point.speed = Some((osd.x_speed.powi(2) + osd.y_speed.powi(2)).sqrt() as f64);
-            point.velocity_x = Some(osd.x_speed as f64);
-            point.velocity_y = Some(osd.y_speed as f64);
-            point.velocity_z = Some(osd.z_speed as f64);
+            point.speed = if has_gps_lock {
+                Some((osd.x_speed.powi(2) + osd.y_speed.powi(2)).sqrt() as f64)
+            } else {
+                None // Speed from 0,0 origin is meaningless
+            };
+            point.velocity_x = if has_gps_lock { Some(osd.x_speed as f64) } else { None };
+            point.velocity_y = if has_gps_lock { Some(osd.y_speed as f64) } else { None };
+            point.velocity_z = if has_gps_lock { Some(osd.z_speed as f64) } else { None };
             point.pitch = Some(osd.pitch as f64);
             point.roll = Some(osd.roll as f64);
             point.yaw = Some(osd.yaw as f64);
@@ -257,13 +286,10 @@ impl<'a> LogParser<'a> {
             point.rc_downlink = rc.downlink_signal.map(i32::from);
             point.rc_signal = rc.downlink_signal.or(rc.uplink_signal).map(i32::from);
 
-            // Only add points with valid GPS data
-            if point.latitude.is_some() && point.longitude.is_some() {
-                points.push(point);
-            }
+            points.push(point);
 
-            // Increment timestamp (frames are typically at 10Hz = 100ms intervals)
-            timestamp_ms = current_timestamp_ms + 100;
+            // Increment timestamp using computed interval
+            timestamp_ms = current_timestamp_ms + fallback_interval_ms;
         }
 
         points

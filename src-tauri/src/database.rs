@@ -740,6 +740,7 @@ impl Database {
                 WHERE flight_id = ? 
                   AND latitude IS NOT NULL 
                   AND longitude IS NOT NULL
+                  AND NOT (ABS(latitude) < 0.000001 AND ABS(longitude) < 0.000001)
             )
             WHERE rn % ? = 0
             ORDER BY rn
@@ -819,6 +820,8 @@ impl Database {
             FROM flights f
             LEFT JOIN telemetry t ON f.id = t.flight_id
             WHERE f.home_lat IS NOT NULL AND f.home_lon IS NOT NULL
+              AND NOT (ABS(f.home_lat) < 0.000001 AND ABS(f.home_lon) < 0.000001)
+              AND NOT (ABS(t.latitude) < 0.000001 AND ABS(t.longitude) < 0.000001)
             "#,
             [],
             |row| row.get(0),
@@ -928,6 +931,7 @@ impl Database {
                 COALESCE(MAX(
                     CASE WHEN f.home_lat IS NOT NULL AND f.home_lon IS NOT NULL
                          AND t.latitude IS NOT NULL AND t.longitude IS NOT NULL
+                         AND NOT (ABS(t.latitude) < 0.000001 AND ABS(t.longitude) < 0.000001)
                     THEN
                         6371000 * 2 * ASIN(SQRT(
                             POWER(SIN(RADIANS(t.latitude - f.home_lat) / 2), 2) +
@@ -939,6 +943,8 @@ impl Database {
                 CAST(f.start_time AS VARCHAR) AS start_time
             FROM flights f
             LEFT JOIN telemetry t ON f.id = t.flight_id
+            WHERE NOT (ABS(f.home_lat) < 0.000001 AND ABS(f.home_lon) < 0.000001)
+               OR f.home_lat IS NULL
             GROUP BY f.id, f.display_name, f.file_name, f.start_time
             ORDER BY max_distance_from_home_m DESC
             "#,

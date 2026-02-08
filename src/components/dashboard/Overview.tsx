@@ -242,6 +242,8 @@ export function Overview({ stats, flights, unitSystem, onSelectFlight }: Overvie
       .map(([date, count]) => ({ date, count }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    const filteredIdSet = new Set(filteredFlights.map((f) => f.id));
+
     // Top 3 longest flights
     const topFlights = [...filteredFlights]
       .filter((f) => f.durationSecs !== null)
@@ -255,9 +257,12 @@ export function Overview({ stats, flights, unitSystem, onSelectFlight }: Overvie
       }));
 
 
-    // For max distance from home, use the global stat if no filter applied
-    const hasFilters = dateRange?.from || dateRange?.to || selectedDrone || selectedBattery;
-    const maxDistanceFromHomeM = hasFilters ? 0 : stats.maxDistanceFromHomeM;
+    // For max distance from home, compute from per-flight data (works with filters)
+    const maxDistanceFromHomeM = stats.topDistanceFlights
+      ? stats.topDistanceFlights
+          .filter((df) => filteredIdSet.has(df.id))
+          .reduce((max, df) => Math.max(max, df.maxDistanceFromHomeM), 0)
+      : stats.maxDistanceFromHomeM;
 
     return {
       totalFlights,
@@ -271,7 +276,7 @@ export function Overview({ stats, flights, unitSystem, onSelectFlight }: Overvie
       flightsByDate,
       topFlights,
     };
-  }, [filteredFlights, dateRange, selectedDrone, selectedBattery, stats.maxDistanceFromHomeM]);
+  }, [filteredFlights, dateRange, selectedDrone, selectedBattery, stats.maxDistanceFromHomeM, stats.topDistanceFlights]);
 
   const filteredHealthPoints = useMemo(() => {
     if (!stats.batteryHealthPoints.length) return [] as BatteryHealthPoint[];
@@ -431,7 +436,7 @@ export function Overview({ stats, flights, unitSystem, onSelectFlight }: Overvie
         <StatCard label="Max Altitude" value={formatAltitude(filteredStats.maxAltitudeM, unitSystem)} small />
         <StatCard
           label="Max Distance from Home"
-          value={hasFilters ? '--' : formatDistance(filteredStats.maxDistanceFromHomeM, unitSystem)}
+          value={formatDistance(filteredStats.maxDistanceFromHomeM, unitSystem)}
           small
         />
         <StatCard label="Avg Distance / Flight" value={formatDistance(avgDistancePerFlight, unitSystem)} small />
