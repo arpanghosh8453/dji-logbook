@@ -931,133 +931,122 @@ ${points}
               onSelectFlight?.(flight.id);
             }
           }}
-          className={`w-full p-3 text-left hover:bg-gray-700/30 transition-[background-color] duration-150 group ${
+          className={`w-full px-3 py-2 text-left cursor-pointer ${
             selectedFlightId === flight.id
               ? 'bg-dji-primary/20 border-l-2 border-dji-primary'
               : 'border-l-2 border-transparent'
           }`}
         >
-          <div className="flex items-start justify-between">
-            <div className="flex-1 min-w-0">
-              {/* Display Name */}
-              {editingId === flight.id ? (
-                <div className="flex flex-col gap-2">
-                  <input
-                    value={draftName}
-                    onChange={(e) => setDraftName(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    className="input h-8 text-sm px-2 w-full"
-                    placeholder="Flight name"
-                  />
-                  <div className="flex items-center gap-2 pb-1">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const name = draftName.trim();
-                        if (name.length > 0) {
-                          updateFlightName(flight.id, name);
-                        }
-                        setEditingId(null);
-                      }}
-                      className="text-xs text-dji-primary hover:text-dji-accent"
-                    >
-                      Save
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingId(null);
-                      }}
-                      className="text-xs text-gray-400 hover:text-gray-200"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <p className="font-medium text-gray-300 truncate">
-                    {flight.displayName || flight.fileName}
-                  </p>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingId(flight.id);
-                      setDraftName(flight.displayName || flight.fileName);
-                      setConfirmDeleteId(null);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white transition-colors"
-                    title="Rename flight"
-                  >
-                    <EditIcon />
-                  </button>
-                </div>
-              )}
-
-              {/* Drone Model */}
-              {flight.droneModel && !flight.droneModel.startsWith('Unknown') && (
-                <p className="text-xs text-gray-400 mt-0.5 truncate">
-                  {flight.droneModel}
-                </p>
-              )}
-
-              {/* Flight Date */}
-              <p className="text-xs text-gray-400 mt-0.5">
-                {formatDateTime(flight.startTime)}
-              </p>
-
-              {/* Stats Row */}
-              <div className="flex gap-3 mt-2 text-xs text-gray-500">
-                <span className="flex items-center gap-1">
-                  <ClockIcon />
-                  {formatDuration(flight.durationSecs)}
-                </span>
-                <span className="flex items-center gap-1">
-                  <DistanceIcon />
-                  {formatDistance(flight.totalDistance, unitSystem)}
-                </span>
+          {/* Rename mode */}
+          {editingId === flight.id ? (
+            <div>
+              <input
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                className="input h-7 text-sm px-2 w-full"
+                placeholder="Flight name"
+              />
+              <div className="flex items-center gap-2 mt-1">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const name = draftName.trim();
+                    if (name.length > 0) {
+                      updateFlightName(flight.id, name);
+                    }
+                    setEditingId(null);
+                  }}
+                  className="text-xs text-dji-primary"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingId(null);
+                  }}
+                  className="text-xs text-gray-400"
+                >
+                  Cancel
+                </button>
               </div>
-
-              {confirmDeleteId === flight.id && editingId !== flight.id && (
-                <div className="flex items-center gap-2 mt-2 text-xs">
-                  <span className="text-gray-400">Are you sure?</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteFlight(flight.id);
-                      setConfirmDeleteId(null);
-                    }}
-                    className="text-xs text-red-400 hover:text-red-300"
-                  >
-                    Yes
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmDeleteId(null);
-                    }}
-                    className="text-xs text-gray-400 hover:text-gray-200"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              )}
             </div>
-
-            {/* Delete Button */}
-            {editingId !== flight.id && (
-              <button
-                onClick={async (e) => {
+          ) : (
+            <div className="flex items-center justify-between gap-1">
+              <p
+                className="text-sm text-gray-300 truncate flex-1 min-w-0"
+                onDoubleClick={(e) => {
                   e.stopPropagation();
-                  setConfirmDeleteId(flight.id);
+                  setEditingId(flight.id);
+                  setDraftName(flight.displayName || flight.fileName);
+                  setConfirmDeleteId(null);
                 }}
-                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-all"
-                title="Delete flight"
+                title={flight.displayName || flight.fileName}
               >
-                <TrashIcon />
+                {flight.displayName || flight.fileName}
+              </p>
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditingId(flight.id);
+                    setDraftName(flight.displayName || flight.fileName);
+                    setConfirmDeleteId(null);
+                  }}
+                  className="p-0.5 text-sky-400"
+                  title="Rename flight"
+                >
+                  <EditIcon />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDeleteId(flight.id);
+                  }}
+                  className="p-0.5 text-red-400"
+                  title="Delete flight"
+                >
+                  <TrashIcon />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Subtitle: date + duration */}
+          {editingId !== flight.id && (
+            <p className="text-xs text-gray-500 mt-0.5 truncate">
+              {formatDateTime(flight.startTime)}
+              {flight.durationSecs ? ` · ${formatDuration(flight.durationSecs)}` : ''}
+              {flight.totalDistance ? ` · ${formatDistance(flight.totalDistance, unitSystem)}` : ''}
+            </p>
+          )}
+
+          {/* Delete confirmation */}
+          {confirmDeleteId === flight.id && editingId !== flight.id && (
+            <div className="flex items-center gap-2 mt-1 text-xs">
+              <span className="text-gray-400">Delete?</span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  deleteFlight(flight.id);
+                  setConfirmDeleteId(null);
+                }}
+                className="text-red-400"
+              >
+                Yes
               </button>
-            )}
-          </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirmDeleteId(null);
+                }}
+                className="text-gray-400"
+              >
+                No
+              </button>
+            </div>
+          )}
         </div>
       ))}
       {sortedFlights.length === 0 && normalizedSearch.length === 0 && (
@@ -1116,46 +1105,10 @@ ${points}
   );
 }
 
-function ClockIcon() {
-  return (
-    <svg
-      className="w-3.5 h-3.5"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={2}
-        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-      />
-    </svg>
-  );
-}
-
-function DistanceIcon() {
-  return (
-    <svg
-      className="w-3.5 h-3.5"
-      fill="none"
-      stroke="currentColor"
-      viewBox="0 0 24 24"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={2}
-        d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"
-      />
-    </svg>
-  );
-}
-
 function TrashIcon() {
   return (
     <svg
-      className="w-4 h-4 text-red-400"
+      className="w-3.5 h-3.5"
       fill="none"
       stroke="currentColor"
       viewBox="0 0 24 24"
@@ -1172,7 +1125,7 @@ function TrashIcon() {
 
 function EditIcon() {
   return (
-    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
