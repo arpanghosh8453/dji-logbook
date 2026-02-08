@@ -164,9 +164,13 @@
       "theme_aware": "Chart base config is now theme-aware (createBaseChartConfig). Axis colors, label colors, tooltip bg/border/text, data zoom styling, and data background all adapt to light/dark mode."
     },
     "map": {
-      "visuals": "Gradient path with start/end markers and modern toggle UI.",
-      "layers": "deck.gl 3D path overlay with session-persisted toggles.",
-      "styles": "Satellite basemap toggle and 3D terrain improvements."
+      "smoothing": "Raw GPS track smoothed with Catmull-Rom spline interpolation (resolution=4) for natural curves.",
+      "path": "deck.gl PathLayer with per-segment gradient coloring, 4px width, shadow/outline layer (7px, black 40% opacity). Path data includes meta per segment (height, speed, distance, progress, lat, lng).",
+      "color_by": "Dropdown with 4 modes: Progress (yellow→red), Height (green→yellow→red), Speed (blue→cyan→green→yellow→red), Distance from Home (green→yellow→orange→red). Multi-stop ramps with lerp interpolation.",
+      "markers": "Start (pulsing yellow dot + label), End (red circle with landing arrow + label), Home (blue 'H' circle). All use react-map-gl Marker components.",
+      "tooltip": "Hover tooltip shows Height (m), Speed (km/h), Dist. Home (m/km), Lat, Lng. Toggleable via controls panel (default on, session-persisted). Uses manual deck.pickObject() on parent div mousemove with pickingRadius=12 — DeckGL overlay keeps pointer-events:none so map pan/rotate/zoom remain fully interactive.",
+      "toggles": "3D Terrain, Satellite, Tooltip — all session-persisted via sessionStorage.",
+      "styles": "Satellite basemap (ArcGIS tiles), dark/light Carto basemaps, 3D terrain (MapLibre DEM)."
     },
     "logging": {
       "tauri": "tauri-plugin-log enabled at LevelFilter::Debug; console + log file targets.",
@@ -354,7 +358,7 @@
     "filters": "Flight list uses date range popover (react-day-picker), drone and battery selects.",
     "flight_list": "Simple compact list with always-visible rename (sky-400) and delete (red-400) icons. Subtitle shows date · duration · distance. Double-click name to rename. No hover effects or transitions.",
     "charts": "ECharts with synced zoom; reset zoom button; map + charts resizable panels; tooltip header uses pill capsules for duration/time; attitude panel taller; RC ticks fixed to 0/50/100. Theme-aware base config adapts all visual elements to light/dark mode.",
-    "map": "MapLibre terrain with global theme styling.",
+    "map": "MapLibre terrain with global theme styling. deck.gl overlay with spline-smoothed color-by gradient path, shadow layer, start/end/home markers, hover tooltip (manual picking, pointer-events passthrough).",
     "loading": "Spinner uses border-sky-400 for both-mode visibility."
   },
   "known_issues": [

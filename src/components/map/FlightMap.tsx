@@ -10,12 +10,14 @@ import type { StyleSpecification } from 'maplibre-gl';
 import { PathLayer } from '@deck.gl/layers';
 import DeckGL from '@deck.gl/react';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { getTrackCenter, calculateBounds } from '@/lib/utils';
+import { getTrackCenter, calculateBounds, formatAltitude, formatSpeed, formatDistance } from '@/lib/utils';
+import { useFlightStore } from '@/stores/flightStore';
 
 interface FlightMapProps {
   track: [number, number, number][]; // [lng, lat, alt][]
   homeLat?: number | null;
   homeLon?: number | null;
+  durationSecs?: number | null;
   themeMode: 'system' | 'dark' | 'light';
 }
 
@@ -182,7 +184,7 @@ const COLOR_BY_OPTIONS: { value: ColorByMode; label: string }[] = [
   { value: 'distance', label: 'Dist. from Home' },
 ];
 
-export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps) {
+export function FlightMap({ track, homeLat, homeLon, durationSecs, themeMode }: FlightMapProps) {
   const [viewState, setViewState] = useState({
     longitude: 0,
     latitude: 0,
@@ -196,7 +198,15 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
     if (typeof window === 'undefined') return 'progress';
     return (window.sessionStorage.getItem('map:colorBy') as ColorByMode) || 'progress';
   });
+  const [showTooltip, setShowTooltip] = useState(() => getSessionBool('map:showTooltip', true));
+  const [hoverInfo, setHoverInfo] = useState<{
+    x: number; y: number;
+    height: number; speed: number; distance: number; progress: number;
+    lat: number; lng: number;
+  } | null>(null);
+  const { unitSystem } = useFlightStore();
   const mapRef = useRef<MapRef | null>(null);
+  const deckRef = useRef<any>(null);
 
   const resolvedTheme = useMemo(() => {
     if (themeMode === 'system') {
@@ -290,7 +300,22 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
     };
     const ramp = getRamp();
 
-    const segments: { path: [number, number, number][]; color: [number, number, number] }[] = [];
+    // Pre-compute per-point speed and distance for tooltip (always, regardless of colorBy)
+    const speeds: number[] = [0];
+    for (let i = 1; i < n; i++) {
+      speeds.push(
+        haversineM(smoothedTrack[i - 1][1], smoothedTrack[i - 1][0], smoothedTrack[i][1], smoothedTrack[i][0])
+      );
+    }
+    const hLat = homeLat ?? smoothedTrack[0][1];
+    const hLon = homeLon ?? smoothedTrack[0][0];
+    const distances: number[] = smoothedTrack.map((p) => haversineM(hLat, hLon, p[1], p[0]));
+
+    const segments: {
+      path: [number, number, number][];
+      color: [number, number, number];
+      meta: { height: number; speed: number; distance: number; progress: number; lat: number; lng: number };
+    }[] = [];
 
     for (let i = 0; i < n - 1; i++) {
       const t = values ? (values[i] - minVal) / range : i / Math.max(1, n - 2);
@@ -303,6 +328,14 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
           [lng2, lat2, toAlt(alt2)],
         ],
         color,
+        meta: {
+          height: smoothedTrack[i][2],
+          speed: speeds[i],
+          distance: distances[i],
+          progress: i / Math.max(1, n - 2),
+          lat: lat1,
+          lng: lng1,
+        },
       });
     }
 
@@ -312,7 +345,7 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
   const deckLayers = useMemo(() => {
     if (deckPathData.length === 0) return [];
     return [
-      // Shadow / outline layer — wider, dark, semi-transparent, drawn first (underneath)
+      // Shadow / outline layer
       new PathLayer({
         id: 'flight-path-shadow',
         data: deckPathData,
@@ -326,11 +359,9 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
         billboard: true,
         opacity: 1,
         pickable: false,
-        parameters: {
-          depthTest: false,
-        },
+        parameters: { depthTest: false },
       }),
-      // Main gradient path layer
+      // Main gradient path layer — pickable when tooltip is on
       new PathLayer({
         id: 'flight-path-3d',
         data: deckPathData,
@@ -343,13 +374,11 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
         jointRounded: true,
         billboard: true,
         opacity: 1,
-        pickable: false,
-        parameters: {
-          depthTest: false,
-        },
+        pickable: showTooltip,
+        parameters: { depthTest: false },
       }),
     ];
-  }, [deckPathData]);
+  }, [deckPathData, showTooltip]);
 
   // Start and end markers
   const startPoint = track[0];
@@ -420,6 +449,13 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
   }, [colorBy]);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.sessionStorage.setItem('map:showTooltip', String(showTooltip));
+    }
+    if (!showTooltip) setHoverInfo(null);
+  }, [showTooltip]);
+
+  useEffect(() => {
     if (is3D) {
       enableTerrain();
     }
@@ -434,7 +470,28 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
   }
 
   return (
-    <div className="relative h-full w-full min-h-0">
+    <div
+      className="relative h-full w-full min-h-0"
+      onMouseMove={(e) => {
+        if (!showTooltip || !deckRef.current) {
+          if (hoverInfo) setHoverInfo(null);
+          return;
+        }
+        const rect = e.currentTarget.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const deck = deckRef.current.deck;
+        if (!deck) { setHoverInfo(null); return; }
+        const picked = deck.pickObject({ x, y, radius: 12 });
+        if (picked?.object?.meta) {
+          const { meta } = picked.object;
+          setHoverInfo({ x, y, ...meta });
+        } else {
+          setHoverInfo(null);
+        }
+      }}
+      onMouseLeave={() => { if (hoverInfo) setHoverInfo(null); }}
+    >
       <Map
         {...viewState}
         style={{ width: '100%', height: '100%', position: 'absolute', top: '0', right: '0', bottom: '0', left: '0' }}
@@ -461,6 +518,11 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
             label="Satellite"
             checked={isSatellite}
             onChange={setIsSatellite}
+          />
+          <ToggleRow
+            label="Tooltip"
+            checked={showTooltip}
+            onChange={setShowTooltip}
           />
 
           {/* Color-by dropdown */}
@@ -521,11 +583,56 @@ export function FlightMap({ track, homeLat, homeLon, themeMode }: FlightMapProps
       </Map>
 
       <DeckGL
+        ref={deckRef}
         viewState={viewState}
         controller={false}
         layers={deckLayers}
-        style={{ width: '100%', height: '100%', pointerEvents: 'none', position: 'absolute', top: '0', right: '0', bottom: '0', left: '0' }}
+        pickingRadius={12}
+        style={{
+          width: '100%', height: '100%',
+          pointerEvents: 'none',
+          position: 'absolute', top: '0', right: '0', bottom: '0', left: '0',
+        }}
       />
+
+      {/* Hover tooltip */}
+      {hoverInfo && showTooltip && (
+        <div
+          className="pointer-events-none absolute z-50"
+          style={{ left: hoverInfo.x + 12, top: hoverInfo.y - 60 }}
+        >
+          <div className="bg-gray-900/95 backdrop-blur-sm border border-gray-600/60 rounded-lg px-3 py-2 shadow-xl text-[11px] text-gray-200 space-y-0.5 min-w-[160px]">
+            {durationSecs != null && durationSecs > 0 && (
+              <div className="flex justify-between gap-4">
+                <span className="text-gray-400">Flight Time</span>
+                <span className="font-medium text-white">
+                  {(() => { const s = Math.round(hoverInfo.progress * durationSecs); const m = Math.floor(s / 60); return `${m}m ${s % 60}s`; })()}
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between gap-4">
+              <span className="text-gray-400">Height</span>
+              <span className="font-medium text-white">{formatAltitude(hoverInfo.height, unitSystem)}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-gray-400">Speed</span>
+              <span className="font-medium text-white">{formatSpeed(hoverInfo.speed, unitSystem)}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-gray-400">Dist. Home</span>
+              <span className="font-medium text-white">{formatDistance(hoverInfo.distance, unitSystem)}</span>
+            </div>
+            <div className="border-t border-gray-700/60 mt-1 pt-1 flex justify-between gap-4">
+              <span className="text-gray-500">Lat</span>
+              <span className="text-gray-400">{hoverInfo.lat.toFixed(6)}</span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-gray-500">Lng</span>
+              <span className="text-gray-400">{hoverInfo.lng.toFixed(6)}</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -277,6 +277,7 @@ export function Dashboard() {
                     track={currentFlightData!.track}
                     homeLat={currentFlightData!.flight.homeLat}
                     homeLon={currentFlightData!.flight.homeLon}
+                    durationSecs={currentFlightData!.flight.durationSecs}
                     themeMode={themeMode}
                   />
                 </div>
