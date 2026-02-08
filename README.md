@@ -208,12 +208,13 @@ All flight data (DuckDB database, cached decryption keys) is stored in a Docker 
 
 ## How to obtain your own DJI Developer API key
 
-To acquire an apiKey, follow these steps:
+I have shipped this project with my own API key to save you from some extra painful steps. If you are tech savvy please read the following guide to generate and use your own API key for this project. To acquire an apiKey, follow these steps:
 
-1. Visit [DJI Developer Technologies](https://developer.dji.com/user) and log in. Create an account if you don't have one, this is different registration than your existing DJI account
-2. Click `CREATE APP`, choose `Open API` as the App Type, and provide the necessary details like `App Name`, `Category`, and `Description`.
-3. After creating the app, activate it through the link sent to your email.
-4. On your developer user page, find your app's details to retrieve the ApiKey (labeled as the SDK key or app key).
+1. Visit [DJI Developer Technologies](https://developer.dji.com/user) and log in. Create an account if you don't have one, this is different registration than your existing DJI account, but you can login with your existing account as well. 
+2. Fill out personal info (for those who value privacy, I’m not sure if it needs to be real info)
+3. Click `CREATE APP`, choose `Open API` as the App Type, and provide the necessary details like `App Name`, `Category`, and `Description`.
+4. After creating the app, activate it through the link sent to your email.
+6. On your developer user page, find your app's details to retrieve the 31 character long alphanumeric ApiKey (labeled as the SDK key or APP key). Do not use the APP ID number, that is not your API key. 
 
 
 ## Love this project?
