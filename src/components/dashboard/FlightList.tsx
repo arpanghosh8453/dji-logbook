@@ -49,6 +49,7 @@ export function FlightList({ onSelectFlight }: { onSelectFlight?: (flightId: num
   >('date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [isSortOpen, setIsSortOpen] = useState(false);
+  const [isFiltersCollapsed, setIsFiltersCollapsed] = useState(false);
   const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState({ done: 0, total: 0, currentFile: '' });
@@ -664,7 +665,32 @@ ${points}
       setConfirmDeleteId(null);
       setConfirmBulkDelete(false);
     }}>
-        <div className="p-3 border-b border-gray-700 space-y-3 flex-shrink-0">
+        <div className="border-b border-gray-700 flex-shrink-0">
+        {/* Collapsible filter header */}
+        <button
+          type="button"
+          onClick={() => setIsFiltersCollapsed((v) => !v)}
+          className="w-full flex items-center justify-between px-3 py-2 text-xs text-gray-400 hover:text-white transition-colors"
+        >
+          <span className={`font-medium ${dateRange?.from || dateRange?.to || selectedDrone || selectedBattery ? 'text-emerald-400' : ''}`}>
+            {dateRange?.from || dateRange?.to || selectedDrone || selectedBattery ? 'Filters — Active' : 'Filters'}
+          </span>
+          <span
+            className={`w-5 h-5 rounded-full border border-gray-600 flex items-center justify-center transition-transform duration-200 ${
+              isFiltersCollapsed ? 'rotate-180' : ''
+            }`}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+          </span>
+        </button>
+
+        {/* Collapsible filter body */}
+        <div
+          className={`transition-all duration-200 ease-in-out ${
+            isFiltersCollapsed ? 'max-h-0 overflow-hidden opacity-0' : 'max-h-[600px] overflow-visible opacity-100'
+          }`}
+        >
+        <div className="px-3 pb-3 space-y-3">
         <div>
           <label className="block text-xs text-gray-400 mb-1">Date range</label>
           <button
@@ -867,6 +893,10 @@ ${points}
           </div>
         )}
 
+        </div>
+        </div>
+        {/* Search + sort — always visible */}
+        <div className="px-3 py-2 space-y-0">
         <div className="flex items-center gap-2">
           <input
             value={searchQuery}
@@ -922,6 +952,7 @@ ${points}
             )}
           </div>
         </div>
+      </div>
       </div>
 
       {/* Scrollable flight list */}
