@@ -19,13 +19,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [appDataDir, setAppDataDir] = useState('');
   const [appLogDir, setAppLogDir] = useState('');
+  const [appVersion, setAppVersion] = useState('');
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // True when any long-running destructive/IO operation is in progress
-  const isBusy = isBackingUp || isRestoring || isDeleting;
   const {
     unitSystem,
     setUnitSystem,
@@ -36,7 +35,16 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     clearSelection,
     donationAcknowledged,
     setDonationAcknowledged,
+    smartTagsEnabled,
+    setSmartTagsEnabled,
+    loadSmartTagsEnabled,
+    regenerateSmartTags,
+    isRegenerating,
+    regenerationProgress,
   } = useFlightStore();
+
+  // True when any long-running destructive/IO operation is in progress
+  const isBusy = isBackingUp || isRestoring || isDeleting || isRegenerating;
 
   // Check if API key exists on mount
   useEffect(() => {
@@ -44,6 +52,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       checkApiKey();
       getAppDataDir();
       getAppLogDir();
+      loadSmartTagsEnabled();
+      fetchAppVersion();
     }
   }, [isOpen]);
 
@@ -77,6 +87,18 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       setHasKey(exists);
     } catch (err) {
       console.error('Failed to check API key:', err);
+    }
+  };
+
+  const fetchAppVersion = async () => {
+    try {
+      // Try Tauri API first (desktop mode)
+      const { getVersion } = await import('@tauri-apps/api/app');
+      const version = await getVersion();
+      setAppVersion(version);
+    } catch {
+      // Fallback to package.json version injected by Vite
+      setAppVersion(__APP_VERSION__);
     }
   };
 
@@ -205,6 +227,16 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
               {isBackingUp && 'Exporting backup…'}
               {isRestoring && 'Restoring backup…'}
               {isDeleting && 'Deleting all logs…'}
+              {isRegenerating && (
+                <>
+                  Regenerating smart tags…
+                  {regenerationProgress && (
+                    <span className="block text-xs text-gray-400 mt-1">
+                      Processed {regenerationProgress.processed} of {regenerationProgress.total} flights
+                    </span>
+                  )}
+                </>
+              )}
             </p>
           </div>
         )}
@@ -226,13 +258,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         {/* Content */}
         <div className="p-4 space-y-4">
           {/* Units */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-medium text-gray-300 whitespace-nowrap w-[15%] shrink-0">
               Units
             </label>
             <Select
               value={unitSystem}
               onChange={(v) => setUnitSystem(v as 'metric' | 'imperial')}
+              className="w-[85%]"
               options={[
                 { value: 'metric', label: 'Metric (m, km/h)' },
                 { value: 'imperial', label: 'Imperial (ft, mph)' },
@@ -241,13 +274,14 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </div>
 
           {/* Theme */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+          <div className="flex items-center gap-3">
+            <label className="text-sm font-medium text-gray-300 whitespace-nowrap w-[15%] shrink-0">
               Theme
             </label>
             <Select
               value={themeMode}
               onChange={(v) => setThemeMode(v as 'system' | 'dark' | 'light')}
+              className="w-[85%]"
               options={[
                 { value: 'system', label: 'System' },
                 { value: 'dark', label: 'Dark' },
@@ -256,35 +290,67 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             />
           </div>
 
+          {/* Smart Tags */}
+          <div>
+            <p className="text-sm font-medium text-gray-300 mb-2">Smart Tags</p>
+            <button
+              type="button"
+              onClick={() => setSmartTagsEnabled(!smartTagsEnabled)}
+              className="flex items-center justify-between gap-3 w-full text-[0.85rem] text-gray-300"
+              aria-pressed={smartTagsEnabled}
+            >
+              <span>Intelligent flight tags</span>
+              <span
+                className={`relative inline-flex h-5 w-9 items-center rounded-full border transition-all ${
+                  smartTagsEnabled
+                    ? 'bg-dji-primary/90 border-dji-primary'
+                    : 'bg-dji-surface border-gray-600'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                    smartTagsEnabled ? 'translate-x-4' : 'translate-x-1'
+                  }`}
+                />
+              </span>
+            </button>
+            <p className="text-xs text-gray-500 mt-1">
+              Automatically generate descriptive tags when importing flights.
+            </p>
+
+            <button
+              type="button"
+              onClick={async () => {
+                const msg = await regenerateSmartTags();
+                setMessage({ type: 'success', text: msg });
+              }}
+              disabled={isBusy}
+              className="mt-3 w-full py-2 px-3 rounded-lg border border-teal-600 text-teal-400 hover:bg-teal-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+            >
+              <span className="flex items-center justify-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Regenerate smart tags
+              </span>
+            </button>
+          </div>
+
           {/* API Key Section */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
               DJI API Key
             </label>
             <p className="text-xs text-gray-500 mb-3">
-              Required for decrypting V13+ flight logs. Get your key from{' '}
+              For decrypting V13+ flight logs. Get your own key following{' '}
               <a
-                href="https://developer.dji.com/"
+                href="https://github.com/arpanghosh8453/dji-logbook#how-to-obtain-your-own-dji-developer-api-key"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-dji-primary hover:underline"
               >
-                developer.dji.com
+                this guide
               </a>
-            </p>
-            <p className="text-xs text-gray-500 mb-3">
-              The standalone app ships with a developer-provided key, but please use your own
-              API key to avoid rate limit issues. See the
-              {' '}
-              <a
-                href="https://developer.dji.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-dji-primary hover:underline"
-              >
-                DJI developer portal
-              </a>
-              {' '}for guidance.
             </p>
 
             {/* Status indicator */}
@@ -355,6 +421,10 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           {/* Info Section */}
           <div className="pt-4 border-t border-gray-700">
             <p className="text-xs text-gray-500">
+              <strong className="text-gray-400">App Version:</strong>{' '}
+              <span className="text-gray-400">{appVersion || '...'}</span>
+            </p>
+            <p className="text-xs text-gray-500 mt-2">
               <strong className="text-gray-400">Data Location:</strong>
               <br />
               <code className="text-xs text-gray-400 bg-dji-dark px-1 py-0.5 rounded">

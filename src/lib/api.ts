@@ -10,7 +10,7 @@
  * - "web"  (set when building for Docker/web deployment)
  */
 
-import type { Flight, FlightDataResponse, ImportResult, OverviewStats } from '@/types';
+import type { Flight, FlightDataResponse, FlightTag, ImportResult, OverviewStats } from '@/types';
 
 const isWeb = import.meta.env.VITE_BACKEND === 'web';
 
@@ -183,6 +183,79 @@ export async function getAppLogDir(): Promise<string> {
   }
   const invoke = await getTauriInvoke();
   return invoke('get_app_log_dir') as Promise<string>;
+}
+
+// ============================================================================
+// Tag Management
+// ============================================================================
+
+export async function addFlightTag(flightId: number, tag: string): Promise<FlightTag[]> {
+  if (isWeb) {
+    return fetchJson<FlightTag[]>('/flights/tags/add', {
+      method: 'POST',
+      body: JSON.stringify({ flight_id: flightId, tag }),
+    });
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('add_flight_tag', { flightId, tag }) as Promise<FlightTag[]>;
+}
+
+export async function removeFlightTag(flightId: number, tag: string): Promise<FlightTag[]> {
+  if (isWeb) {
+    return fetchJson<FlightTag[]>('/flights/tags/remove', {
+      method: 'POST',
+      body: JSON.stringify({ flight_id: flightId, tag }),
+    });
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('remove_flight_tag', { flightId, tag }) as Promise<FlightTag[]>;
+}
+
+export async function getAllTags(): Promise<string[]> {
+  if (isWeb) {
+    return fetchJson<string[]>('/tags');
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('get_all_tags') as Promise<string[]>;
+}
+
+export async function getSmartTagsEnabled(): Promise<boolean> {
+  if (isWeb) {
+    return fetchJson<boolean>('/settings/smart_tags');
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('get_smart_tags_enabled') as Promise<boolean>;
+}
+
+export async function setSmartTagsEnabled(enabled: boolean): Promise<boolean> {
+  if (isWeb) {
+    return fetchJson<boolean>('/settings/smart_tags', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('set_smart_tags_enabled', { enabled }) as Promise<boolean>;
+}
+
+export async function regenerateSmartTags(): Promise<string> {
+  if (isWeb) {
+    return fetchJson<string>('/regenerate_smart_tags', {
+      method: 'POST',
+    });
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('regenerate_all_smart_tags') as Promise<string>;
+}
+
+export async function regenerateFlightSmartTags(flightId: number): Promise<string> {
+  if (isWeb) {
+    return fetchJson<string>(`/regenerate_flight_smart_tags/${flightId}`, {
+      method: 'POST',
+    });
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('regenerate_flight_smart_tags', { flightId }) as Promise<string>;
 }
 
 // ============================================================================

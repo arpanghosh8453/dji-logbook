@@ -289,30 +289,6 @@ export function FlightClusterMap({
     [flights],
   );
 
-  // Reset zoom to fit all flight points
-  const resetBounds = useCallback(() => {
-    const map = mapRef.current;
-    if (!map || geojson.features.length === 0) return;
-    const coords = geojson.features.map(
-      (f) => f.geometry.coordinates as [number, number],
-    );
-    if (coords.length === 1) {
-      map.flyTo({ center: coords[0], zoom: 12, duration: 800 });
-      return;
-    }
-    let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
-    coords.forEach(([lng, lat]) => {
-      if (lng < minLng) minLng = lng;
-      if (lng > maxLng) maxLng = lng;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-    });
-    map.fitBounds(
-      [[minLng, minLat], [maxLng, maxLat]],
-      { padding: 50, maxZoom: 14, duration: 800 },
-    );
-  }, [geojson]);
-
   // Cursor pointer on interactive layers
   const handleMouseEnter = useCallback(() => {
     const map = mapRef.current;
@@ -356,20 +332,6 @@ export function FlightClusterMap({
           onMouseLeave={handleMouseLeave}
         >
           <NavigationControl position="top-right" />
-
-          {/* Home / reset zoom button */}
-          <div className="absolute top-[84px] right-[10px] z-10">
-            <button
-              type="button"
-              onClick={resetBounds}
-              className="maplibregl-ctrl maplibregl-ctrl-group w-[29px] h-[29px] flex items-center justify-center"
-              title="Reset view"
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z" />
-              </svg>
-            </button>
-          </div>
 
           {/* Satellite toggle */}
           <div className="map-overlay absolute top-2 left-2 z-10 bg-dji-dark/80 border border-gray-700 rounded-xl px-3 py-2 shadow-lg">

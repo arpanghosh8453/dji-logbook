@@ -1,9 +1,9 @@
 /**
  * Custom themed Select dropdown that works properly in both dark and light themes.
- * Replaces native <select> whose <option> elements don't respect CSS in WebKitGTK.
+ * Supports filtering by typing — text is discarded on blur if no match is selected.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 
 export interface SelectOption {
   value: string;
@@ -19,11 +19,23 @@ interface SelectProps {
 
 export function Select({ value, onChange, options, className = '' }: SelectProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const selectedLabel = options.find((o) => o.value === value)?.label ?? value;
 
-  const close = useCallback(() => setIsOpen(false), []);
+  const close = useCallback(() => {
+    setIsOpen(false);
+    setSearch('');
+  }, []);
+
+  // Filtered options based on search term
+  const filteredOptions = useMemo(() => {
+    if (!search.trim()) return options;
+    const lower = search.toLowerCase();
+    return options.filter((o) => o.label.toLowerCase().includes(lower));
+  }, [options, search]);
 
   // Close on outside click
   useEffect(() => {
@@ -47,11 +59,17 @@ export function Select({ value, onChange, options, className = '' }: SelectProps
     return () => document.removeEventListener('keydown', handler);
   }, [isOpen, close]);
 
-  // Scroll selected into view when opening
+  // Focus input when opening & scroll selected into view
   useEffect(() => {
-    if (isOpen && listRef.current) {
-      const active = listRef.current.querySelector('[data-active="true"]');
-      if (active) active.scrollIntoView({ block: 'nearest' });
+    if (isOpen) {
+      // Small delay to let the DOM render
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+        if (listRef.current) {
+          const active = listRef.current.querySelector('[data-active="true"]');
+          if (active) active.scrollIntoView({ block: 'nearest' });
+        }
+      });
     }
   }, [isOpen]);
 
@@ -76,24 +94,45 @@ export function Select({ value, onChange, options, className = '' }: SelectProps
 
       {/* Dropdown */}
       {isOpen && (
-        <div
-          ref={listRef}
-          className="themed-select-dropdown absolute z-50 mt-1 w-full max-h-48 overflow-auto rounded-lg border shadow-xl"
-        >
-          {options.map((opt) => (
-            <div
-              key={opt.value}
-              data-active={opt.value === value}
-              onClick={() => {
-                onChange(opt.value);
-                close();
+        <div className="absolute z-50 mt-1 w-full rounded-lg border shadow-xl themed-select-dropdown">
+          {/* Search input */}
+          <div className="px-2 py-1.5 border-b border-gray-700/50">
+            <input
+              ref={inputRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && filteredOptions.length > 0) {
+                  onChange(filteredOptions[0].value);
+                  close();
+                }
               }}
-              className={`themed-select-option cursor-pointer px-3 py-1.5 text-sm truncate
-                ${opt.value === value ? 'font-medium' : ''}`}
-            >
-              {opt.label}
-            </div>
-          ))}
+              placeholder="Type to filter…"
+              className="w-full bg-transparent text-sm text-gray-200 placeholder-gray-500 outline-none"
+            />
+          </div>
+          {/* Options list */}
+          <div ref={listRef} className="max-h-48 overflow-auto">
+            {filteredOptions.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-gray-500 italic">No matches</div>
+            ) : (
+              filteredOptions.map((opt) => (
+                <div
+                  key={opt.value}
+                  data-active={opt.value === value}
+                  onClick={() => {
+                    onChange(opt.value);
+                    close();
+                  }}
+                  className={`themed-select-option cursor-pointer px-3 py-1.5 text-sm truncate
+                    ${opt.value === value ? 'font-medium' : ''}`}
+                >
+                  {opt.label}
+                </div>
+              ))
+            )}
+          </div>
         </div>
       )}
     </div>

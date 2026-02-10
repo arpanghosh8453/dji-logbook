@@ -65,7 +65,8 @@
 - **Telemetry Charts**: Height/VPS, speed, battery, attitude, RC signal, GPS satellites, RC uplink/downlink, distance-to-home, and velocity X/Y/Z with synchronized drag-to-zoom across all charts.
 - **V13+ Log Support**: Automatic encryption key handling for newer DJI logs
 - **Local-First**: All data stored locally in a single DuckDB database - No sketchy server upload. No need to even upload in DJI's servers, you can copy the log files locally and process them locally (for log decryption, the key will be sent to DJI's server during import, so you need to be online during the first import of a new log file)
-- **Filters, Search & Sort**: Date range picker, drone/device filter, battery serial filter, duration range slider, search, and sorting - shared across flight list and overview
+- **Smart Tags**: Automatic flight tagging on import — Night Flight, High Speed, Cold Battery, Low Battery, High Altitude, Long Distance, and more. Offline reverse geocoding adds city, country, and continent tags from takeoff coordinates (no internet needed). Add your own manual tags too. Toggle auto-tagging on/off and regenerate tags for all flights from Settings.
+- **Filters, Search & Sort**: Date range picker, drone/device filter, battery serial filter, duration range slider, tag filter, search, and sorting - shared across flight list and overview. Filter inversion to negate selections. Searchable dropdowns with type-to-filter.
 - **Overview Dashboard**: Aggregate totals, averages, heatmap activity, pie-chart breakdowns (by drone, battery, flight duration), and top-flight highlights - all filtered by sidebar selections
 - **Battery Health Insights**: Per-battery health bars with inline serial renaming, and per‑minute charge usage history timeline with zoom/scroll
 - **Theme & Units**: Light/Dark/System theme and Metric/Imperial units
@@ -193,6 +194,7 @@ All flight data (DuckDB database, cached decryption keys) is stored in a Docker 
 - **Axum 0.7**: Web REST API server for Docker/web deployment (feature-gated behind `web`)
 - **DuckDB**: Embedded analytical database (bundled, no installation required)
 - **dji-log-parser**: DJI flight log parsing library
+- **reverse_geocoder**: Offline city/country/continent geocoding (bundled GeoNames dataset)
 
 ### Frontend (React)
 - **React 18 + TypeScript**: UI framework
@@ -221,7 +223,8 @@ All flight data (DuckDB database, cached decryption keys) is stored in a Docker 
 │   ├── components/
 │   │   ├── dashboard/       # Layout components
 │   │   ├── charts/          # ECharts components
-│   │   └── map/             # MapLibre components
+│   │   ├── map/             # MapLibre components
+│   │   └── ui/              # Reusable UI components (Select)
 │   ├── stores/              # Zustand state
 │   ├── types/               # TypeScript interfaces
 │   └── lib/
@@ -237,7 +240,8 @@ All flight data (DuckDB database, cached decryption keys) is stored in a Docker 
 ├── docker-compose-build.yml # Build from source locally
 │
 └── [App Data Directory]     # RUNTIME DATA
-    ├── flights.db           # DuckDB database
+    ├── flights.db           # DuckDB database (flights, telemetry, flight_tags, keychains)
+    ├── config.json          # API key and smart tags settings
     └── keychains/           # Cached decryption keys
 ```
 

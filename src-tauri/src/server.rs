@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, Query, State as AxumState},
+    extract::{DefaultBodyLimit, Multipart, Path, Query, State as AxumState},
     http::StatusCode,
     routing::{delete, get, post, put},
     Json, Router,
@@ -17,7 +17,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::api::DjiApi;
 use crate::database::Database;
-use crate::models::{FlightDataResponse, ImportResult, OverviewStats, TelemetryData};
+use crate::models::{FlightDataResponse, FlightTag, ImportResult, OverviewStats, TelemetryData};
 use crate::parser::LogParser;
 
 /// Shared application state for Axum handlers
@@ -129,6 +129,23 @@ async fn import_log(
             }));
         }
     };
+
+    // Insert smart tags if the feature is enabled
+    let config_path = state.db.data_dir.join("config.json");
+    let tags_enabled = if config_path.exists() {
+        std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("smart_tags_enabled").and_then(|v| v.as_bool()))
+            .unwrap_or(true)
+    } else {
+        true
+    };
+    if tags_enabled {
+        if let Err(e) = state.db.insert_flight_tags(flight_id, &parse_result.tags) {
+            log::warn!("Failed to insert tags for flight {}: {}", flight_id, e);
+        }
+    }
 
     log::info!(
         "Successfully imported flight {} with {} points in {:.1}s",
@@ -354,6 +371,239 @@ async fn import_backup(
 }
 
 // ============================================================================
+// TAG MANAGEMENT ENDPOINTS
+// ============================================================================
+
+/// POST /api/flights/tags/add — Add a tag to a flight
+#[derive(Deserialize)]
+struct AddTagPayload {
+    flight_id: i64,
+    tag: String,
+}
+
+async fn add_flight_tag(
+    AxumState(state): AxumState<WebAppState>,
+    Json(payload): Json<AddTagPayload>,
+) -> Result<Json<Vec<FlightTag>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .db
+        .add_flight_tag(payload.flight_id, &payload.tag)
+        .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to add tag: {}", e)))?;
+    state
+        .db
+        .get_flight_tags(payload.flight_id)
+        .map(Json)
+        .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get tags: {}", e)))
+}
+
+/// POST /api/flights/tags/remove — Remove a tag from a flight
+#[derive(Deserialize)]
+struct RemoveTagPayload {
+    flight_id: i64,
+    tag: String,
+}
+
+async fn remove_flight_tag(
+    AxumState(state): AxumState<WebAppState>,
+    Json(payload): Json<RemoveTagPayload>,
+) -> Result<Json<Vec<FlightTag>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .db
+        .remove_flight_tag(payload.flight_id, &payload.tag)
+        .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to remove tag: {}", e)))?;
+    state
+        .db
+        .get_flight_tags(payload.flight_id)
+        .map(Json)
+        .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get tags: {}", e)))
+}
+
+/// GET /api/tags — Get all unique tags
+async fn get_all_tags(
+    AxumState(state): AxumState<WebAppState>,
+) -> Result<Json<Vec<String>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .db
+        .get_all_unique_tags()
+        .map(Json)
+        .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get tags: {}", e)))
+}
+
+/// GET /api/settings/smart_tags — Check if smart tags are enabled
+async fn get_smart_tags_enabled(
+    AxumState(state): AxumState<WebAppState>,
+) -> Json<bool> {
+    let config_path = state.db.data_dir.join("config.json");
+    let enabled = if config_path.exists() {
+        std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("smart_tags_enabled").and_then(|v| v.as_bool()))
+            .unwrap_or(true)
+    } else {
+        true
+    };
+    Json(enabled)
+}
+
+/// POST /api/settings/smart_tags — Set smart tags enabled
+#[derive(Deserialize)]
+struct SmartTagsPayload {
+    enabled: bool,
+}
+
+async fn set_smart_tags_enabled(
+    AxumState(state): AxumState<WebAppState>,
+    Json(payload): Json<SmartTagsPayload>,
+) -> Result<Json<bool>, (StatusCode, Json<ErrorResponse>)> {
+    let config_path = state.db.data_dir.join("config.json");
+    let mut config: serde_json::Value = if config_path.exists() {
+        let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    config["smart_tags_enabled"] = serde_json::json!(payload.enabled);
+    std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
+        .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write config: {}", e)))?;
+    Ok(Json(payload.enabled))
+}
+
+/// POST /api/regenerate_flight_smart_tags/:id — Regenerate auto tags for a single flight
+async fn regenerate_flight_smart_tags(
+    AxumState(state): AxumState<WebAppState>,
+    Path(flight_id): Path<i64>,
+) -> Result<Json<String>, (StatusCode, Json<ErrorResponse>)> {
+    use crate::parser::{LogParser, calculate_stats_from_records};
+
+    let flight = state.db.get_flight_by_id(flight_id)
+        .map_err(|e| err_response(StatusCode::NOT_FOUND, format!("Failed to get flight {}: {}", flight_id, e)))?;
+
+    let metadata = crate::models::FlightMetadata {
+        id: flight.id,
+        file_name: flight.file_name.clone(),
+        display_name: flight.display_name.clone(),
+        file_hash: None,
+        drone_model: flight.drone_model.clone(),
+        drone_serial: flight.drone_serial.clone(),
+        aircraft_name: flight.aircraft_name.clone(),
+        battery_serial: flight.battery_serial.clone(),
+        start_time: flight.start_time.as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .or_else(|| flight.start_time.as_deref()
+                .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+                    .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f").ok()))
+                .map(|ndt| ndt.and_utc())),
+        end_time: None,
+        duration_secs: flight.duration_secs,
+        total_distance: flight.total_distance,
+        max_altitude: flight.max_altitude,
+        max_speed: flight.max_speed,
+        home_lat: flight.home_lat,
+        home_lon: flight.home_lon,
+        point_count: flight.point_count.unwrap_or(0),
+    };
+
+    match state.db.get_flight_telemetry(flight_id, Some(50000), None) {
+        Ok(records) if !records.is_empty() => {
+            let stats = calculate_stats_from_records(&records);
+            let tags = LogParser::generate_smart_tags(&metadata, &stats);
+            state.db.replace_auto_tags(flight_id, &tags)
+                .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to replace tags: {}", e)))?;
+        }
+        Ok(_) => {
+            let _ = state.db.replace_auto_tags(flight_id, &[]);
+        }
+        Err(e) => {
+            return Err(err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get telemetry: {}", e)));
+        }
+    }
+
+    Ok(Json("ok".to_string()))
+}
+
+/// POST /api/regenerate_smart_tags — Regenerate auto tags for all flights
+async fn regenerate_smart_tags(
+    AxumState(state): AxumState<WebAppState>,
+) -> Result<Json<String>, (StatusCode, Json<ErrorResponse>)> {
+    use crate::parser::{LogParser, calculate_stats_from_records};
+
+    log::info!("Starting smart tag regeneration for all flights");
+    let start = std::time::Instant::now();
+
+    let flight_ids = state.db.get_all_flight_ids()
+        .map_err(|e| err_response(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get flight IDs: {}", e)))?;
+
+    let _total = flight_ids.len();
+    let mut processed = 0usize;
+    let mut errors = 0usize;
+
+    for flight_id in &flight_ids {
+        match state.db.get_flight_by_id(*flight_id) {
+            Ok(flight) => {
+                let metadata = crate::models::FlightMetadata {
+                    id: flight.id,
+                    file_name: flight.file_name.clone(),
+                    display_name: flight.display_name.clone(),
+                    file_hash: None,
+                    drone_model: flight.drone_model.clone(),
+                    drone_serial: flight.drone_serial.clone(),
+                    aircraft_name: flight.aircraft_name.clone(),
+                    battery_serial: flight.battery_serial.clone(),
+                    start_time: flight.start_time.as_deref()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .or_else(|| flight.start_time.as_deref()
+                            .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+                                .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f").ok()))
+                            .map(|ndt| ndt.and_utc())),
+                    end_time: None,
+                    duration_secs: flight.duration_secs,
+                    total_distance: flight.total_distance,
+                    max_altitude: flight.max_altitude,
+                    max_speed: flight.max_speed,
+                    home_lat: flight.home_lat,
+                    home_lon: flight.home_lon,
+                    point_count: flight.point_count.unwrap_or(0),
+                };
+
+                match state.db.get_flight_telemetry(*flight_id, Some(50000), None) {
+                    Ok(records) if !records.is_empty() => {
+                        let stats = calculate_stats_from_records(&records);
+                        let tags = LogParser::generate_smart_tags(&metadata, &stats);
+                        if let Err(e) = state.db.replace_auto_tags(*flight_id, &tags) {
+                            log::warn!("Failed to replace tags for flight {}: {}", flight_id, e);
+                            errors += 1;
+                        }
+                    }
+                    Ok(_) => {
+                        let _ = state.db.replace_auto_tags(*flight_id, &[]);
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to get telemetry for flight {}: {}", flight_id, e);
+                        errors += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to get flight {}: {}", flight_id, e);
+                errors += 1;
+            }
+        }
+        processed += 1;
+    }
+
+    let elapsed = start.elapsed().as_secs_f64();
+    let msg = format!(
+        "Regenerated smart tags for {} flights ({} errors) in {:.1}s",
+        processed, errors, elapsed
+    );
+    log::info!("{}", msg);
+    Ok(Json(msg))
+}
+
+// ============================================================================
 // SERVER SETUP
 // ============================================================================
 
@@ -372,6 +622,13 @@ pub fn build_router(state: WebAppState) -> Router {
         .route("/api/flights/delete", delete(delete_flight))
         .route("/api/flights/delete_all", delete(delete_all_flights))
         .route("/api/flights/name", put(update_flight_name))
+        .route("/api/flights/tags/add", post(add_flight_tag))
+        .route("/api/flights/tags/remove", post(remove_flight_tag))
+        .route("/api/tags", get(get_all_tags))
+        .route("/api/settings/smart_tags", get(get_smart_tags_enabled))
+        .route("/api/settings/smart_tags", post(set_smart_tags_enabled))
+        .route("/api/regenerate_smart_tags", post(regenerate_smart_tags))
+        .route("/api/regenerate_flight_smart_tags/:id", post(regenerate_flight_smart_tags))
         .route("/api/has_api_key", get(has_api_key))
         .route("/api/set_api_key", post(set_api_key))
         .route("/api/app_data_dir", get(get_app_data_dir))

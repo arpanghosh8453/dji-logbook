@@ -47,6 +47,16 @@ pub struct Flight {
     pub home_lat: Option<f64>,
     pub home_lon: Option<f64>,
     pub point_count: Option<i32>,
+    #[serde(default)]
+    pub tags: Vec<FlightTag>,
+}
+
+/// A tag attached to a flight, with a type indicator
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlightTag {
+    pub tag: String,
+    pub tag_type: String,  // "auto" or "manual"
 }
 
 /// Raw telemetry point from parser (for bulk insert)
@@ -384,4 +394,8 @@ pub struct FlightStats {
     pub avg_speed_ms: f64,
     pub min_battery: i32,
     pub home_location: Option<[f64; 2]>,
+    pub max_distance_from_home_m: f64,
+    pub start_battery_percent: Option<i32>,
+    pub end_battery_percent: Option<i32>,
+    pub start_battery_temp: Option<f64>,
 }

@@ -15,7 +15,7 @@ mod database;
 mod models;
 mod parser;
 
-#[cfg(feature = "web")]
+#[cfg(all(feature = "web", not(feature = "tauri-app")))]
 mod server;
 
 // ============================================================================
@@ -32,7 +32,7 @@ mod tauri_app {
     use log::LevelFilter;
 
     use crate::database::{Database, DatabaseError};
-    use crate::models::{Flight, FlightDataResponse, ImportResult, OverviewStats, TelemetryData};
+    use crate::models::{Flight, FlightDataResponse, FlightTag, ImportResult, OverviewStats, TelemetryData};
     use crate::parser::LogParser;
     use crate::api::DjiApi;
 
@@ -121,6 +121,23 @@ mod tauri_app {
                 });
             }
         };
+
+        // Insert smart tags if the feature is enabled
+        let smart_tags_enabled = state.db.data_dir.join("config.json");
+        let tags_enabled = if smart_tags_enabled.exists() {
+            std::fs::read_to_string(&smart_tags_enabled)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .and_then(|v| v.get("smart_tags_enabled").and_then(|v| v.as_bool()))
+                .unwrap_or(true)
+        } else {
+            true
+        };
+        if tags_enabled {
+            if let Err(e) = state.db.insert_flight_tags(flight_id, &parse_result.tags) {
+                log::warn!("Failed to insert tags for flight {}: {}", flight_id, e);
+            }
+        }
 
         log::info!(
             "Successfully imported flight {} with {} points in {:.1}s",
@@ -297,6 +314,199 @@ mod tauri_app {
             .map_err(|e| format!("Failed to import backup: {}", e))
     }
 
+    #[tauri::command]
+    pub async fn add_flight_tag(flight_id: i64, tag: String, state: State<'_, AppState>) -> Result<Vec<FlightTag>, String> {
+        state
+            .db
+            .add_flight_tag(flight_id, &tag)
+            .map_err(|e| format!("Failed to add tag: {}", e))?;
+        state
+            .db
+            .get_flight_tags(flight_id)
+            .map_err(|e| format!("Failed to get tags: {}", e))
+    }
+
+    #[tauri::command]
+    pub async fn remove_flight_tag(flight_id: i64, tag: String, state: State<'_, AppState>) -> Result<Vec<FlightTag>, String> {
+        state
+            .db
+            .remove_flight_tag(flight_id, &tag)
+            .map_err(|e| format!("Failed to remove tag: {}", e))?;
+        state
+            .db
+            .get_flight_tags(flight_id)
+            .map_err(|e| format!("Failed to get tags: {}", e))
+    }
+
+    #[tauri::command]
+    pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+        state
+            .db
+            .get_all_unique_tags()
+            .map_err(|e| format!("Failed to get tags: {}", e))
+    }
+
+    #[tauri::command]
+    pub async fn get_smart_tags_enabled(state: State<'_, AppState>) -> Result<bool, String> {
+        let config_path = state.db.data_dir.join("config.json");
+        if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path)
+                .map_err(|e| format!("Failed to read config: {}", e))?;
+            let val: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse config: {}", e))?;
+            Ok(val.get("smart_tags_enabled").and_then(|v| v.as_bool()).unwrap_or(true))
+        } else {
+            Ok(true)
+        }
+    }
+
+    #[tauri::command]
+    pub async fn set_smart_tags_enabled(enabled: bool, state: State<'_, AppState>) -> Result<bool, String> {
+        let config_path = state.db.data_dir.join("config.json");
+        let mut config: serde_json::Value = if config_path.exists() {
+            let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+            serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        config["smart_tags_enabled"] = serde_json::json!(enabled);
+        std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap())
+            .map_err(|e| format!("Failed to write config: {}", e))?;
+        Ok(enabled)
+    }
+
+    #[tauri::command]
+    pub async fn regenerate_flight_smart_tags(state: State<'_, AppState>, flight_id: i64) -> Result<String, String> {
+        use crate::parser::{LogParser, calculate_stats_from_records};
+
+        let flight = state.db.get_flight_by_id(flight_id)
+            .map_err(|e| format!("Failed to get flight {}: {}", flight_id, e))?;
+
+        let metadata = crate::models::FlightMetadata {
+            id: flight.id,
+            file_name: flight.file_name.clone(),
+            display_name: flight.display_name.clone(),
+            file_hash: None,
+            drone_model: flight.drone_model.clone(),
+            drone_serial: flight.drone_serial.clone(),
+            aircraft_name: flight.aircraft_name.clone(),
+            battery_serial: flight.battery_serial.clone(),
+            start_time: flight.start_time.as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .or_else(|| flight.start_time.as_deref()
+                    .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+                        .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f").ok()))
+                    .map(|ndt| ndt.and_utc())),
+            end_time: None,
+            duration_secs: flight.duration_secs,
+            total_distance: flight.total_distance,
+            max_altitude: flight.max_altitude,
+            max_speed: flight.max_speed,
+            home_lat: flight.home_lat,
+            home_lon: flight.home_lon,
+            point_count: flight.point_count.unwrap_or(0),
+        };
+
+        match state.db.get_flight_telemetry(flight_id, Some(50000), None) {
+            Ok(records) if !records.is_empty() => {
+                let stats = calculate_stats_from_records(&records);
+                let tags = LogParser::generate_smart_tags(&metadata, &stats);
+                state.db.replace_auto_tags(flight_id, &tags)
+                    .map_err(|e| format!("Failed to replace tags for flight {}: {}", flight_id, e))?;
+            }
+            Ok(_) => {
+                let _ = state.db.replace_auto_tags(flight_id, &[]);
+            }
+            Err(e) => {
+                return Err(format!("Failed to get telemetry for flight {}: {}", flight_id, e));
+            }
+        }
+
+        Ok("ok".to_string())
+    }
+
+    #[tauri::command]
+    pub async fn regenerate_all_smart_tags(state: State<'_, AppState>) -> Result<String, String> {
+        use crate::parser::{LogParser, calculate_stats_from_records};
+
+        log::info!("Starting smart tag regeneration for all flights");
+        let start = std::time::Instant::now();
+
+        let flight_ids = state.db.get_all_flight_ids()
+            .map_err(|e| format!("Failed to get flight IDs: {}", e))?;
+
+        let _total = flight_ids.len();
+        let mut processed = 0usize;
+        let mut errors = 0usize;
+
+        for flight_id in &flight_ids {
+            match state.db.get_flight_by_id(*flight_id) {
+                Ok(flight) => {
+                    // Build FlightMetadata from the Flight record
+                    let metadata = crate::models::FlightMetadata {
+                        id: flight.id,
+                        file_name: flight.file_name.clone(),
+                        display_name: flight.display_name.clone(),
+                        file_hash: None,
+                        drone_model: flight.drone_model.clone(),
+                        drone_serial: flight.drone_serial.clone(),
+                        aircraft_name: flight.aircraft_name.clone(),
+                        battery_serial: flight.battery_serial.clone(),
+                        start_time: flight.start_time.as_deref()
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                            .or_else(|| flight.start_time.as_deref()
+                                .and_then(|s| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").ok()
+                                    .or_else(|| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f").ok()))
+                                .map(|ndt| ndt.and_utc())),
+                        end_time: None,
+                        duration_secs: flight.duration_secs,
+                        total_distance: flight.total_distance,
+                        max_altitude: flight.max_altitude,
+                        max_speed: flight.max_speed,
+                        home_lat: flight.home_lat,
+                        home_lon: flight.home_lon,
+                        point_count: flight.point_count.unwrap_or(0),
+                    };
+
+                    // Get raw telemetry to compute stats
+                    match state.db.get_flight_telemetry(*flight_id, Some(50000), None) {
+                        Ok(records) if !records.is_empty() => {
+                            let stats = calculate_stats_from_records(&records);
+                            let tags = LogParser::generate_smart_tags(&metadata, &stats);
+                            if let Err(e) = state.db.replace_auto_tags(*flight_id, &tags) {
+                                log::warn!("Failed to replace tags for flight {}: {}", flight_id, e);
+                                errors += 1;
+                            }
+                        }
+                        Ok(_) => {
+                            // No telemetry — just clear auto tags
+                            let _ = state.db.replace_auto_tags(*flight_id, &[]);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to get telemetry for flight {}: {}", flight_id, e);
+                            errors += 1;
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to get flight {}: {}", flight_id, e);
+                    errors += 1;
+                }
+            }
+            processed += 1;
+        }
+
+        let elapsed = start.elapsed().as_secs_f64();
+        let msg = format!(
+            "Regenerated smart tags for {} flights ({} errors) in {:.1}s",
+            processed, errors, elapsed
+        );
+        log::info!("{}", msg);
+        Ok(msg)
+    }
+
     pub fn run() {
         tauri::Builder::default()
             .plugin(
@@ -332,6 +542,13 @@ mod tauri_app {
                 get_app_log_dir,
                 export_backup,
                 import_backup,
+                add_flight_tag,
+                remove_flight_tag,
+                get_all_tags,
+                get_smart_tags_enabled,
+                set_smart_tags_enabled,
+                regenerate_flight_smart_tags,
+                regenerate_all_smart_tags,
             ])
             .run(tauri::generate_context!())
             .expect("Failed to run DJI Logbook");
@@ -342,7 +559,7 @@ mod tauri_app {
 // WEB SERVER MODE
 // ============================================================================
 
-#[cfg(feature = "web")]
+#[cfg(all(feature = "web", not(feature = "tauri-app")))]
 async fn run_web() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .init();

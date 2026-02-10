@@ -300,9 +300,12 @@ export function FlightMap({ track, homeLat, homeLon, durationSecs, telemetry, th
     const lo = Math.floor(idx);
     const hi = Math.min(lo + 1, n - 1);
     const frac = idx - lo;
-    const lng = track[lo][0] + (track[hi][0] - track[lo][0]) * frac;
-    const lat = track[lo][1] + (track[hi][1] - track[lo][1]) * frac;
-    const alt = track[lo][2] + (track[hi][2] - track[lo][2]) * frac;
+    const pLo = track[lo];
+    const pHi = track[hi];
+    if (!pLo || !pHi) return null;
+    const lng = pLo[0] + (pHi[0] - pLo[0]) * frac;
+    const lat = pLo[1] + (pHi[1] - pLo[1]) * frac;
+    const alt = pLo[2] + (pHi[2] - pLo[2]) * frac;
     return { lng, lat, alt: is3D ? alt : 0 };
   }, [track, replayProgress, is3D]);
 
@@ -381,8 +384,8 @@ export function FlightMap({ track, homeLat, homeLon, durationSecs, telemetry, th
     // Compute distance from home at this point
     const lat = lerp(telemetry.latitude);
     const lng = lerp(telemetry.longitude);
-    const hLat = homeLat ?? track[0]?.[1] ?? 0;
-    const hLon = homeLon ?? track[0]?.[0] ?? 0;
+    const hLat = homeLat ?? (track.length > 0 ? track[0]?.[1] : null) ?? 0;
+    const hLon = homeLon ?? (track.length > 0 ? track[0]?.[0] : null) ?? 0;
     const distHome = lat !== null && lng !== null
       ? haversineM(hLat, hLon, lat, lng)
       : null;
@@ -482,8 +485,8 @@ export function FlightMap({ track, homeLat, homeLon, durationSecs, telemetry, th
       minVal = Math.min(...values);
       maxVal = Math.max(...values);
     } else if (colorBy === 'distance') {
-      const hLat = homeLat ?? smoothedTrack[0][1];
-      const hLon = homeLon ?? smoothedTrack[0][0];
+      const hLat = homeLat ?? smoothedTrack[0]?.[1] ?? 0;
+      const hLon = homeLon ?? smoothedTrack[0]?.[0] ?? 0;
       values = smoothedTrack.map((p) => haversineM(hLat, hLon, p[1], p[0]));
       minVal = Math.min(...values);
       maxVal = Math.max(...values);
@@ -508,8 +511,8 @@ export function FlightMap({ track, homeLat, homeLon, durationSecs, telemetry, th
         haversineM(smoothedTrack[i - 1][1], smoothedTrack[i - 1][0], smoothedTrack[i][1], smoothedTrack[i][0])
       );
     }
-    const hLat = homeLat ?? smoothedTrack[0][1];
-    const hLon = homeLon ?? smoothedTrack[0][0];
+    const hLat = homeLat ?? smoothedTrack[0]?.[1] ?? 0;
+    const hLon = homeLon ?? smoothedTrack[0]?.[0] ?? 0;
     const distances: number[] = smoothedTrack.map((p) => haversineM(hLat, hLon, p[1], p[0]));
 
     const segments: {
@@ -519,10 +522,13 @@ export function FlightMap({ track, homeLat, homeLon, durationSecs, telemetry, th
     }[] = [];
 
     for (let i = 0; i < n - 1; i++) {
+      const ptA = smoothedTrack[i];
+      const ptB = smoothedTrack[i + 1];
+      if (!ptA || !ptB) continue;
       const t = values ? (values[i] - minVal) / range : i / Math.max(1, n - 2);
       const color = valueToColor(t, ramp);
-      const [lng1, lat1, alt1] = smoothedTrack[i];
-      const [lng2, lat2, alt2] = smoothedTrack[i + 1];
+      const [lng1, lat1, alt1] = ptA;
+      const [lng2, lat2, alt2] = ptB;
       segments.push({
         path: [
           [lng1, lat1, toAlt(alt1)],
@@ -530,7 +536,7 @@ export function FlightMap({ track, homeLat, homeLon, durationSecs, telemetry, th
         ],
         color,
         meta: {
-          height: smoothedTrack[i][2],
+          height: alt1,
           speed: speeds[i],
           distance: distances[i],
           progress: i / Math.max(1, n - 2),
@@ -582,8 +588,8 @@ export function FlightMap({ track, homeLat, homeLon, durationSecs, telemetry, th
   }, [deckPathData, showTooltip]);
 
   // Start and end markers
-  const startPoint = track[0];
-  const endPoint = track[track.length - 1];
+  const startPoint = track.length > 0 ? track[0] : undefined;
+  const endPoint = track.length > 0 ? track[track.length - 1] : undefined;
 
   const handleMapMove = useCallback(
     ({ viewState: nextViewState }: { viewState: typeof viewState }) => {

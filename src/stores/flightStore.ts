@@ -15,10 +15,14 @@ interface FlightState {
   overviewStats: OverviewStats | null;
   isLoading: boolean;
   isImporting: boolean;
+  isRegenerating: boolean;
+  regenerationProgress: { processed: number; total: number } | null;
   error: string | null;
   unitSystem: 'metric' | 'imperial';
   themeMode: 'system' | 'dark' | 'light';
   donationAcknowledged: boolean;
+  allTags: string[];
+  smartTagsEnabled: boolean;
 
   // Flight data cache (keyed by flight ID)
   _flightDataCache: Map<number, FlightDataResponse>;
@@ -30,6 +34,12 @@ interface FlightState {
   importLog: (fileOrPath: string | File) => Promise<ImportResult>;
   deleteFlight: (flightId: number) => Promise<void>;
   updateFlightName: (flightId: number, displayName: string) => Promise<void>;
+  addTag: (flightId: number, tag: string) => Promise<void>;
+  removeTag: (flightId: number, tag: string) => Promise<void>;
+  loadAllTags: () => Promise<void>;
+  setSmartTagsEnabled: (enabled: boolean) => Promise<void>;
+  loadSmartTagsEnabled: () => Promise<void>;
+  regenerateSmartTags: () => Promise<string>;
   setUnitSystem: (unitSystem: 'metric' | 'imperial') => void;
   setThemeMode: (themeMode: 'system' | 'dark' | 'light') => void;
   setDonationAcknowledged: (value: boolean) => void;
@@ -54,6 +64,8 @@ export const useFlightStore = create<FlightState>((set, get) => ({
   overviewStats: null,
   isLoading: false,
   isImporting: false,
+  isRegenerating: false,
+  regenerationProgress: null,
   error: null,
   unitSystem:
     (typeof localStorage !== 'undefined' &&
@@ -71,6 +83,8 @@ export const useFlightStore = create<FlightState>((set, get) => ({
       ? localStorage.getItem('donationAcknowledged') === 'true'
       : false,
   _flightDataCache: new Map(),
+  allTags: [],
+  smartTagsEnabled: true,
   batteryNameMap: (() => {
     if (typeof localStorage === 'undefined') return {};
     try {
@@ -87,6 +101,9 @@ export const useFlightStore = create<FlightState>((set, get) => ({
     try {
       const flights = await api.getFlights();
       set({ flights, isLoading: false });
+
+      // Load all tags in background
+      get().loadAllTags();
 
       // Auto-select last used flight if available (avoid heavy load on fresh startup)
       const selectedFlightId = get().selectedFlightId;
@@ -190,6 +207,8 @@ export const useFlightStore = create<FlightState>((set, get) => ({
         // Reload flights and select the new one
         await get().loadFlights();
         await get().selectFlight(result.flightId);
+        // Refresh all tags since import may have added new smart tags
+        get().loadAllTags();
       }
       
       set({ isImporting: false });
@@ -260,6 +279,114 @@ export const useFlightStore = create<FlightState>((set, get) => ({
     } catch (err) {
       set({ error: `Failed to update flight name: ${err}` });
     }
+  },
+
+  // Add a tag to a flight
+  addTag: async (flightId: number, tag: string) => {
+    try {
+      const tags = await api.addFlightTag(flightId, tag);
+      // Update local flight list
+      const flights = get().flights.map((f) =>
+        f.id === flightId ? { ...f, tags } : f
+      );
+      set({ flights });
+      // Update current flight data if selected
+      const current = get().currentFlightData;
+      if (current && current.flight.id === flightId) {
+        const updated = {
+          ...current,
+          flight: { ...current.flight, tags },
+        };
+        const cache = new Map(get()._flightDataCache);
+        cache.set(flightId, updated);
+        set({ currentFlightData: updated, _flightDataCache: cache });
+      }
+      // Refresh all tags
+      get().loadAllTags();
+    } catch (err) {
+      set({ error: `Failed to add tag: ${err}` });
+    }
+  },
+
+  // Remove a tag from a flight
+  removeTag: async (flightId: number, tag: string) => {
+    try {
+      const tags = await api.removeFlightTag(flightId, tag);
+      const flights = get().flights.map((f) =>
+        f.id === flightId ? { ...f, tags } : f
+      );
+      set({ flights });
+      const current = get().currentFlightData;
+      if (current && current.flight.id === flightId) {
+        const updated = {
+          ...current,
+          flight: { ...current.flight, tags },
+        };
+        const cache = new Map(get()._flightDataCache);
+        cache.set(flightId, updated);
+        set({ currentFlightData: updated, _flightDataCache: cache });
+      }
+      get().loadAllTags();
+    } catch (err) {
+      set({ error: `Failed to remove tag: ${err}` });
+    }
+  },
+
+  // Load all unique tags
+  loadAllTags: async () => {
+    try {
+      const tags = await api.getAllTags();
+      set({ allTags: tags });
+    } catch {
+      // Silently ignore — tags are optional
+    }
+  },
+
+  // Load smart tags enabled setting from backend
+  loadSmartTagsEnabled: async () => {
+    try {
+      const enabled = await api.getSmartTagsEnabled();
+      set({ smartTagsEnabled: enabled });
+    } catch {
+      // Default to true
+      set({ smartTagsEnabled: true });
+    }
+  },
+
+  // Set smart tags enabled setting
+  setSmartTagsEnabled: async (enabled: boolean) => {
+    try {
+      await api.setSmartTagsEnabled(enabled);
+      set({ smartTagsEnabled: enabled });
+    } catch (err) {
+      set({ error: `Failed to update smart tags setting: ${err}` });
+    }
+  },
+
+  // Regenerate smart tags for all flights
+  regenerateSmartTags: async () => {
+    const flights = get().flights;
+    const total = flights.length;
+    set({ isRegenerating: true, regenerationProgress: { processed: 0, total }, error: null });
+    let errors = 0;
+    const start = Date.now();
+
+    for (let i = 0; i < flights.length; i++) {
+      try {
+        await api.regenerateFlightSmartTags(flights[i].id);
+      } catch {
+        errors += 1;
+      }
+      set({ regenerationProgress: { processed: i + 1, total } });
+    }
+
+    // Reload flights to get updated tags
+    await get().loadFlights();
+    await get().loadAllTags();
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    const msg = `Regenerated smart tags for ${total} flights (${errors} errors) in ${elapsed}s`;
+    set({ isRegenerating: false, regenerationProgress: null });
+    return msg;
   },
 
   setUnitSystem: (unitSystem) => {

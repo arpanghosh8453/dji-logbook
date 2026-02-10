@@ -5,7 +5,7 @@
 
 import type { FlightDataResponse } from '@/types';
 import { isWebMode, downloadFile } from '@/lib/api';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { WeatherModal } from './WeatherModal';
 import weatherIcon from '@/assets/weather-icon.svg';
 import {
@@ -23,10 +23,68 @@ interface FlightStatsProps {
 
 export function FlightStats({ data }: FlightStatsProps) {
   const { flight, telemetry } = data;
-  const { unitSystem, getBatteryDisplayName } = useFlightStore();
+  const { unitSystem, getBatteryDisplayName, addTag, removeTag, allTags } = useFlightStore();
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isWeatherOpen, setIsWeatherOpen] = useState(false);
+  const [isAddingTag, setIsAddingTag] = useState(false);
+  const [newTagValue, setNewTagValue] = useState('');
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
+  const tagInputRef = useRef<HTMLInputElement>(null);
+  const addTagContainerRef = useRef<HTMLDivElement>(null);
+
+  const flightTags = flight.tags ?? [];
+
+  // Filter suggestions based on input
+  useEffect(() => {
+    if (newTagValue.trim()) {
+      const search = newTagValue.toLowerCase();
+      const existing = new Set(flightTags.map(t => (typeof t === 'string' ? t : t.tag).toLowerCase()));
+      setTagSuggestions(
+        allTags
+          .filter(t => t.toLowerCase().includes(search) && !existing.has(t.toLowerCase()))
+          .slice(0, 6)
+      );
+    } else {
+      // Show all unused tags when input is empty and focused
+      const existing = new Set(flightTags.map(t => (typeof t === 'string' ? t : t.tag).toLowerCase()));
+      setTagSuggestions(
+        allTags
+          .filter(t => !existing.has(t.toLowerCase()))
+          .slice(0, 6)
+      );
+    }
+  }, [newTagValue, allTags, flightTags]);
+
+  // Focus input when adding tag
+  useEffect(() => {
+    if (isAddingTag && tagInputRef.current) {
+      tagInputRef.current.focus();
+    }
+  }, [isAddingTag]);
+
+  // Close tag input on outside click
+  useEffect(() => {
+    if (!isAddingTag) return;
+    const handler = (e: MouseEvent) => {
+      if (addTagContainerRef.current && !addTagContainerRef.current.contains(e.target as Node)) {
+        setIsAddingTag(false);
+        setNewTagValue('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [isAddingTag]);
+
+  const handleAddTag = (tag: string) => {
+    const trimmed = tag.trim();
+    const existingNames = flightTags.map(t => typeof t === 'string' ? t : t.tag);
+    if (trimmed && !existingNames.includes(trimmed)) {
+      addTag(flight.id, trimmed);
+    }
+    setNewTagValue('');
+    setIsAddingTag(false);
+  };
 
   // Calculate min battery from telemetry
   const minBattery = telemetry.battery.reduce<number | null>((min, val) => {
@@ -273,6 +331,81 @@ ${points}
                 Battery: {getBatteryDisplayName(flight.batterySerial)}
               </span>
             )}
+            {/* Flight Tags */}
+            {flightTags.map((tagObj) => {
+              const tagName = typeof tagObj === 'string' ? tagObj : tagObj.tag;
+              const tagType = typeof tagObj === 'string' ? 'auto' : tagObj.tagType;
+              const isAuto = tagType === 'auto';
+              return (
+                <span
+                  key={tagName}
+                  className={`group relative px-2 py-0.5 rounded-full text-xs border cursor-default ${
+                    isAuto
+                      ? 'border-teal-500/40 text-teal-300 bg-teal-500/10'
+                      : 'border-violet-500/40 text-violet-300 bg-violet-500/10'
+                  }`}
+                >
+                  {tagName}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeTag(flight.id, tagName);
+                    }}
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm hover:bg-red-400"
+                    title={`Remove tag: ${tagName}`}
+                  >
+                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                  </button>
+                </span>
+              );
+            })}
+            {/* Add tag button */}
+            <div ref={addTagContainerRef} className="relative inline-flex">
+              {isAddingTag ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    ref={tagInputRef}
+                    type="text"
+                    value={newTagValue}
+                    onChange={(e) => setNewTagValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newTagValue.trim()) {
+                        handleAddTag(newTagValue);
+                      } else if (e.key === 'Escape') {
+                        setIsAddingTag(false);
+                        setNewTagValue('');
+                      }
+                    }}
+                    placeholder="Tag name"
+                    className="h-6 w-28 text-xs px-2 rounded-full bg-dji-surface border border-gray-600 text-gray-200 focus:outline-none focus:border-violet-500"
+                  />
+                  {tagSuggestions.length > 0 && (
+                    <div className="absolute left-0 top-full mt-1 z-50 w-40 rounded-lg border border-gray-700 bg-dji-surface shadow-xl max-h-40 overflow-auto">
+                      {tagSuggestions.map((suggestion) => (
+                        <button
+                          key={suggestion}
+                          type="button"
+                          onClick={() => handleAddTag(suggestion)}
+                          className="w-full text-left px-3 py-1.5 text-xs text-gray-300 hover:bg-violet-500/20 hover:text-violet-200 transition-colors"
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsAddingTag(true)}
+                  className="w-5 h-5 rounded-full border border-dashed border-gray-500 text-gray-400 flex items-center justify-center hover:border-violet-400 hover:text-violet-400 transition-colors"
+                  title="Add tag"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

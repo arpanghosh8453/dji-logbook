@@ -28,6 +28,7 @@ export function FlightList({ onSelectFlight }: { onSelectFlight?: (flightId: num
     updateFlightName,
     unitSystem,
     getBatteryDisplayName,
+    allTags,
   } =
     useFlightStore();
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -43,6 +44,10 @@ export function FlightList({ onSelectFlight }: { onSelectFlight?: (flightId: num
   } | null>(null);
   const [selectedDrone, setSelectedDrone] = useState('');
   const [selectedBattery, setSelectedBattery] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [isFilterInverted, setIsFilterInverted] = useState(false);
+  const [isTagDropdownOpen, setIsTagDropdownOpen] = useState(false);
+  const [tagSearch, setTagSearch] = useState('');
   const [durationFilterMin, setDurationFilterMin] = useState<number | null>(null);
   const [durationFilterMax, setDurationFilterMax] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -194,32 +199,47 @@ export function FlightList({ onSelectFlight }: { onSelectFlight?: (flightId: num
     const end = dateRange?.to ? new Date(dateRange.to) : null;
     if (end) end.setHours(23, 59, 59, 999);
 
+    const hasAnyFilter = !!(start || end || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0);
+
     return flights.filter((flight) => {
-      if (start || end) {
-        if (!flight.startTime) return false;
-        const flightDate = new Date(flight.startTime);
-        if (start && flightDate < start) return false;
-        if (end && flightDate > end) return false;
-      }
+      // When no filters are active, show all
+      if (!hasAnyFilter) return true;
 
-      if (selectedDrone) {
-        const key = `${flight.droneModel ?? ''}||${flight.droneSerial ?? ''}`;
-        if (key !== selectedDrone) return false;
-      }
+      const matchesFilter = (() => {
+        if (start || end) {
+          if (!flight.startTime) return false;
+          const flightDate = new Date(flight.startTime);
+          if (start && flightDate < start) return false;
+          if (end && flightDate > end) return false;
+        }
 
-      if (selectedBattery) {
-        if (flight.batterySerial !== selectedBattery) return false;
-      }
+        if (selectedDrone) {
+          const key = `${flight.droneModel ?? ''}||${flight.droneSerial ?? ''}`;
+          if (key !== selectedDrone) return false;
+        }
 
-      if (durationFilterMin !== null || durationFilterMax !== null) {
-        const durationMins = (flight.durationSecs ?? 0) / 60;
-        if (durationFilterMin !== null && durationMins < durationFilterMin) return false;
-        if (durationFilterMax !== null && durationMins > durationFilterMax) return false;
-      }
+        if (selectedBattery) {
+          if (flight.batterySerial !== selectedBattery) return false;
+        }
 
-      return true;
+        if (durationFilterMin !== null || durationFilterMax !== null) {
+          const durationMins = (flight.durationSecs ?? 0) / 60;
+          if (durationFilterMin !== null && durationMins < durationFilterMin) return false;
+          if (durationFilterMax !== null && durationMins > durationFilterMax) return false;
+        }
+
+        // Tag filter: flight must have ALL selected tags
+        if (selectedTags.length > 0) {
+          const flightTagNames = (flight.tags ?? []).map(t => typeof t === 'string' ? t : t.tag);
+          if (!selectedTags.every((tag) => flightTagNames.includes(tag))) return false;
+        }
+
+        return true;
+      })();
+
+      return isFilterInverted ? !matchesFilter : matchesFilter;
     });
-  }, [dateRange, flights, selectedBattery, selectedDrone, durationFilterMin, durationFilterMax]);
+  }, [dateRange, flights, selectedBattery, selectedDrone, durationFilterMin, durationFilterMax, selectedTags, isFilterInverted]);
 
   // Sync filtered flight IDs to the store so Overview can use them
   const setSidebarFilteredFlightIds = useFlightStore((s) => s.setSidebarFilteredFlightIds);
@@ -707,10 +727,31 @@ ${points}
           })}
           className="w-full flex items-center justify-between px-3 py-2 text-xs text-gray-400 hover:text-white transition-colors"
         >
-          <span className={`font-medium ${dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null ? 'text-emerald-400' : ''}`}>
-            {dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null
-              ? 'Filters — Active'
-              : isFiltersCollapsed ? 'Filters — click to expand' : 'Filters'}
+          <span className="flex items-center gap-1.5">
+            <span className={`font-medium ${(dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0) ? (isFilterInverted ? 'text-red-400' : 'text-emerald-400') : ''}`}>
+              {dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0
+                ? isFilterInverted ? 'Filters — Active — Inverted' : 'Filters — Active'
+                : isFiltersCollapsed ? 'Filters — click to expand' : 'Filters'}
+            </span>
+            {(dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0) && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsFilterInverted((v) => !v);
+                }}
+                title={isFilterInverted ? 'Switch to normal filtering' : 'Invert filter selection'}
+                className={`w-5 h-5 rounded flex items-center justify-center transition-colors ${
+                  isFilterInverted
+                    ? 'text-red-400 bg-red-500/20 hover:bg-red-500/30'
+                    : 'text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/10'
+                }`}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                  <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1-.25 1.94-.68 2.77l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1 .25-1.94.68-2.77L5.22 7.77C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+                </svg>
+              </button>
+            )}
           </span>
           <span
             className={`w-5 h-5 rounded-full border border-gray-600 flex items-center justify-center transition-transform duration-200 ${
@@ -879,6 +920,97 @@ ${points}
           />
         </div>
 
+        {/* Tag filter */}
+        {allTags.length > 0 && (
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Tags</label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsTagDropdownOpen((v) => !v)}
+                className="input w-full text-xs h-8 px-3 py-1.5 flex items-center justify-between gap-2"
+              >
+                <span className={selectedTags.length > 0 ? 'text-gray-100 truncate' : 'text-gray-400'}>
+                  {selectedTags.length > 0 ? selectedTags.join(', ') : 'All tags'}
+                </span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              {isTagDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => { setIsTagDropdownOpen(false); setTagSearch(''); }}
+                  />
+                  <div className="absolute left-0 top-full mt-1 z-50 w-full max-h-56 rounded-lg border border-gray-700 bg-dji-surface shadow-xl flex flex-col">
+                    {/* Search input */}
+                    <div className="px-2 pt-2 pb-1 border-b border-gray-700 flex-shrink-0">
+                      <input
+                        type="text"
+                        value={tagSearch}
+                        onChange={(e) => setTagSearch(e.target.value)}
+                        placeholder="Search tags…"
+                        autoFocus
+                        className="w-full bg-gray-800 text-xs text-gray-200 rounded px-2 py-1 border border-gray-600 focus:border-dji-primary focus:outline-none placeholder-gray-500"
+                      />
+                    </div>
+                    <div className="overflow-auto flex-1">
+                    {(() => {
+                      const filtered = allTags.filter((tag) => tag.toLowerCase().includes(tagSearch.toLowerCase()));
+                      if (filtered.length === 0) {
+                        return <p className="text-xs text-gray-500 px-3 py-2">No matching tags</p>;
+                      }
+                      return filtered.map((tag) => {
+                      const isSelected = selectedTags.includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => {
+                            setSelectedTags((prev) =>
+                              isSelected
+                                ? prev.filter((t) => t !== tag)
+                                : [...prev, tag]
+                            );
+                          }}
+                          className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors ${
+                            isSelected
+                              ? 'bg-violet-500/20 text-violet-200'
+                              : 'text-gray-300 hover:bg-gray-700/50'
+                          }`}
+                        >
+                          <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 ${
+                            isSelected ? 'border-violet-500 bg-violet-500' : 'border-gray-600'
+                          }`}>
+                            {isSelected && (
+                              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                            )}
+                          </span>
+                          {tag}
+                        </button>
+                      );
+                    });
+                    })()}
+                    {selectedTags.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTags([]);
+                          setTagSearch('');
+                          setIsTagDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-xs text-gray-400 hover:text-white border-t border-gray-700"
+                      >
+                        Clear tag filter
+                      </button>
+                    )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Filtered count and Clear filters on same line */}
         <div className="flex items-center justify-between">
           <span className="text-xs text-gray-400">
@@ -891,6 +1023,8 @@ ${points}
               setSelectedBattery('');
               setDurationFilterMin(null);
               setDurationFilterMax(null);
+              setSelectedTags([]);
+              setIsFilterInverted(false);
             }}
             className="text-xs text-gray-400 hover:text-white"
           >

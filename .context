@@ -50,6 +50,7 @@
       "env_logger": "0.11",
       "flate2": "1 (gzip compression for backup archives)",
       "tar": "0.4 (tar archive for backup/restore)",
+      "reverse_geocoder": "4.1.1 (offline city/country/continent geocoding from GeoNames data)",
       "tempfile": "3 (dev-dependency for tests)"
     }
   },
@@ -110,7 +111,12 @@
       "UI polish: Battery serial rename mapping (frontend-only, persisted to localStorage, shown everywhere).",
       "UI polish: App min-width 1600px with horizontal scrollbar when window is narrower.",
       "UI polish: WeatherModal rendered via createPortal to document.body with modal-open class for scrollbar suppression.",
-      "Backup & Restore: Export full database (flights, telemetry, keychains) to a portable gzip-compressed tar archive of Parquet files. Import restores data with upsert semantics. Works in both Tauri (native save/open dialogs) and web (browser download/upload).",
+      "Smart Tags: Auto-generated descriptive tags on import (Night Flight, High Speed, Cold Battery, Heavy Load, Low Battery, High Altitude, Long Distance, Long Flight, Short Flight, Aggressive Flying, No GPS) plus offline reverse geocoding (city, country, continent) via reverse_geocoder crate.",
+      "Smart Tags: Two tag types — auto (teal capsules) and manual (violet capsules). Add/remove manual tags via FlightStats. Settings toggle to enable/disable auto-tagging on import. Regenerate smart tags for all flights button in Settings.",
+      "Smart Tags: flight_tags table in DuckDB with tag_type column (auto/manual), migration for older DBs, included in backup/restore.",
+      "Flight list: Tag filter (multi-select dropdown with checkboxes). Filter inversion button (circular arrows icon) to negate all active filters.",
+      "UI: Select dropdowns (drone, battery, settings) are searchable — type to filter options, Enter selects first match, text discarded on blur.",
+      "Backup & Restore: Export full database (flights, telemetry, keychains, flight_tags) to a portable gzip-compressed tar archive of Parquet files. Import restores data with upsert semantics. Works in both Tauri (native save/open dialogs) and web (browser download/upload).",
       "Data safety: DB backup, corruption handling, telemetry rebuild when column order mismatches.",
       "Docker/Web deployment: Axum REST API mirroring all Tauri commands, Nginx reverse proxy, multi-stage Docker build.",
       "Dual-mode frontend: api.ts adapter uses invoke() for Tauri, fetch() for web. All @tauri-apps imports are dynamic."
@@ -129,7 +135,9 @@
         "src/components/dashboard/FlightStats.tsx",
         "src/components/dashboard/FlightImporter.tsx",
         "src/components/dashboard/SettingsModal.tsx",
+        "src/components/dashboard/WeatherModal.tsx",
         "src/components/dashboard/Overview.tsx",
+        "src/components/ui/Select.tsx",
         "src/components/charts/TelemetryCharts.tsx",
         "src/components/map/FlightMap.tsx"
       ],
@@ -137,7 +145,7 @@
         "src/index.css",
         "tailwind.config.js"
       ],
-      "state_store": "src/stores/flightStore.ts (includes batteryNameMap persisted to localStorage, sidebarFilteredFlightIds for Overview filter sync)",
+      "state_store": "src/stores/flightStore.ts (includes batteryNameMap persisted to localStorage, sidebarFilteredFlightIds for Overview filter sync, allTags, smartTagsEnabled, isRegenerating, addTag/removeTag/regenerateSmartTags actions)",
       "api_adapter": "src/lib/api.ts",
       "types": "src/types/index.ts",
       "env_types": "src/vite-env.d.ts"
@@ -232,6 +240,20 @@
       "sidebar_persistence": "Dashboard.tsx: Sidebar width saved to localStorage and restored on load.",
       "replay_slider_styles": "index.css: Custom slider thumb styles for the flight replay seek bar."
     },
+    "smart_tags_and_ux": {
+      "description": "Smart flight tagging system with offline reverse geocoding, searchable filter dropdowns, and filter inversion.",
+      "smart_tags": "parser.rs: generate_smart_tags() produces auto tags based on flight stats (night, speed, battery, altitude, distance, duration). reverse_geocode() uses reverse_geocoder crate for offline city/country/continent from takeoff coordinates.",
+      "tag_types": "Two types: auto (teal capsules, generated on import) and manual (violet capsules, user-added). FlightTag struct with tag + tag_type fields.",
+      "tag_management": "database.rs: flight_tags table with tag_type column, CRUD methods (insert_flight_tags, add_flight_tag, remove_flight_tag, replace_auto_tags, get_all_unique_tags). Migration adds tag_type column to older DBs.",
+      "tag_ui": "FlightStats.tsx: tag capsules with hover-to-delete, inline add-tag input with autocomplete suggestions. FlightList.tsx: multi-select tag filter with checkboxes. SettingsModal.tsx: smart tags toggle and regenerate button.",
+      "filter_inversion": "FlightList.tsx: Invert button (circular arrows icon) negates all active filters. Red styling when inverted.",
+      "searchable_selects": "Select.tsx: Type-to-filter search input at top of dropdown, Enter selects first match, text discarded on close/blur.",
+      "settings_text": "SettingsModal.tsx: Simplified API key section text, links to GitHub guide.",
+      "cfg_gate_fix": "main.rs: mod server and run_web() gated with cfg(all(feature = web, not(feature = tauri-app))) to eliminate 32 dead_code warnings.",
+      "backup_tags": "database.rs: flight_tags table included in backup export and restore.",
+      "api_endpoints": "server.rs: POST /api/flights/tags/add, POST /api/flights/tags/remove, GET /api/tags, GET/POST /api/settings/smart_tags, POST /api/regenerate_smart_tags.",
+      "tauri_commands": "main.rs: add_flight_tag, remove_flight_tag, get_all_tags, get_smart_tags_enabled, set_smart_tags_enabled, regenerate_all_smart_tags."
+    },
     "v1_5_0_sidebar_and_telemetry": {
       "description": "Sidebar UX polish, unified sidebar filters for Overview, weather modal fix, map replay telemetry overlay.",
       "collapsible_sections": "Dashboard.tsx: Collapsible Import section (default expanded) moved below Flights/Overview toggle. FlightList.tsx: Collapsible Filters section (default collapsed). Both persisted to localStorage with 'click to expand' hints.",
@@ -259,7 +281,8 @@
         "droneModel",
         "droneSerial",
         "aircraftName",
-        "batterySerial"
+        "batterySerial",
+        "tags"
       ]
     },
     "telemetry": {
@@ -342,6 +365,11 @@
         "rc_uplink",
         "rc_downlink"
       ],
+      "flight_tags": [
+        "flight_id",
+        "tag",
+        "tag_type"
+      ],
       "keychains": [
         "serial_number",
         "encryption_key",
@@ -354,7 +382,9 @@
       "Downsampling occurs when telemetry points exceed ~5000 (1s buckets).",
       "Map track altitude uses COALESCE(height, vps_height, altitude) for relative 3D paths.",
       "App data dir structure: flights.db + keychains/.",
-      "Failed telemetry inserts trigger automatic flight metadata cleanup."
+      "Failed telemetry inserts trigger automatic flight metadata cleanup.",
+      "flight_tags table stores per-flight tags with tag_type (auto/manual). Included in backup/restore. Migration adds tag_type column if missing.",
+      "Smart tags config (enabled/disabled) stored in config.json alongside API key."
     ]
   },
   "api_endpoints": {
@@ -371,6 +401,12 @@
       "POST   /api/set_api_key        - Set API key (JSON: api_key)",
       "GET    /api/app_data_dir       - Data directory path",
       "GET    /api/app_log_dir        - Log directory path",
+      "POST   /api/flights/tags/add   - Add a manual tag to a flight (JSON: flight_id, tag)",
+      "POST   /api/flights/tags/remove - Remove a tag from a flight (JSON: flight_id, tag)",
+      "GET    /api/tags                - Get all unique tags across all flights",
+      "GET    /api/settings/smart_tags - Check if smart tags are enabled",
+      "POST   /api/settings/smart_tags - Set smart tags enabled (JSON: enabled)",
+      "POST   /api/regenerate_smart_tags - Regenerate auto tags for all flights",
       "GET    /api/backup             - Download compressed database backup (tar.gz of Parquet files)",
       "POST   /api/backup/restore     - Upload and restore a backup file (multipart)"
     ]
@@ -391,7 +427,9 @@
       "Altitude/height values >10km and speed >100 m/s are clamped to None.",
       "V13+ logs require keychain decryption; API key fetched from config or default.",
       "File deduplication via SHA256 hash prevents re-importing the same log.",
-      "Parsing runs in spawn_blocking with catch_unwind and 40s timeout for crash safety."
+      "Parsing runs in spawn_blocking with catch_unwind and 40s timeout for crash safety.",
+      "Smart tags generated from FlightStats: night detection (local hour via lon-based TZ offset), speed, battery, altitude, distance, duration thresholds.",
+      "Offline reverse geocoding via reverse_geocoder crate (bundled GeoNames dataset ~15MB). Returns city name, country (from CC lookup table), and continent."
     ]
   },
   "commands": {
@@ -428,7 +466,7 @@
   },
   "ui": {
     "themes": "CSS variables in src/index.css; body classes theme-light/theme-dark. Light mode uses !important overrides.",
-    "filters": "Flight list uses date range popover (react-day-picker), drone and battery selects, and dual-thumb duration slider. Collapsible filter/import panels persisted to localStorage. Overview shares sidebar filters via store.",
+    "filters": "Flight list uses date range popover (react-day-picker), drone and battery selects (searchable via type-to-filter), dual-thumb duration slider, and multi-select tag filter. Filter inversion button (circular arrows) negates all active filters. Collapsible filter/import panels persisted to localStorage. Overview shares sidebar filters via store.",
     "flight_list": "Simple compact list with always-visible rename (pencil icon, sky-400) and delete (trash icon, red-400) icons. Subtitle shows date . duration . distance.",
     "charts": "ECharts with synced zoom; global drag-to-zoom toggle + reset zoom buttons; tooltip header uses pill capsules. Theme-aware base config. Hidden per-chart toolbox enables selection highlight for drag-to-zoom.",
     "map": "MapLibre terrain with deck.gl overlay. Spline-smoothed color-by gradient path, shadow layer, start/end/home markers, hover tooltip. Replay telemetry overlay with live-interpolated data during playback.",

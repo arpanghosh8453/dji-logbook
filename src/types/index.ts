@@ -3,6 +3,12 @@
  * These are the data shapes exchanged via Tauri IPC
  */
 
+/** A flight tag with its type (auto/manual) */
+export interface FlightTag {
+  tag: string;
+  tagType: 'auto' | 'manual';
+}
+
 /** Flight metadata for list display */
 export interface Flight {
   id: number;
@@ -20,6 +26,7 @@ export interface Flight {
   homeLat?: number | null;
   homeLon?: number | null;
   pointCount: number | null;
+  tags?: FlightTag[];
 }
 
 /** Telemetry data formatted for ECharts */

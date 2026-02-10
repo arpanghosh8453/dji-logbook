@@ -95,6 +95,92 @@ body.theme-light .map-overlay {
   border-color: #e2e8f0 !important;
 }
 
+/* Light mode: flight tags */
+body.theme-light .text-teal-300 {
+  color: #0d9488 !important;
+}
+
+body.theme-light .border-teal-500\/40 {
+  border-color: rgba(20, 184, 166, 0.5) !important;
+}
+
+body.theme-light .bg-teal-500\/10 {
+  background-color: rgba(20, 184, 166, 0.12) !important;
+}
+
+body.theme-light .text-violet-300 {
+  color: #7c3aed !important;
+}
+
+body.theme-light .border-violet-500\/40 {
+  border-color: rgba(139, 92, 246, 0.5) !important;
+}
+
+body.theme-light .bg-violet-500\/10 {
+  background-color: rgba(139, 92, 246, 0.12) !important;
+}
+
+body.theme-light .text-violet-200 {
+  color: #6d28d9 !important;
+}
+
+body.theme-light .hover\:bg-violet-500\/20:hover {
+  background-color: rgba(139, 92, 246, 0.15) !important;
+}
+
+body.theme-light .hover\:text-violet-200:hover {
+  color: #6d28d9 !important;
+}
+
+body.theme-light .hover\:border-violet-400:hover {
+  border-color: #8b5cf6 !important;
+}
+
+body.theme-light .hover\:text-violet-400:hover {
+  color: #7c3aed !important;
+}
+
+body.theme-light .focus\:border-violet-500:focus {
+  border-color: #8b5cf6 !important;
+}
+
+/* Light mode: settings modal button text */
+body.theme-light .text-teal-400 {
+  color: #0d9488 !important;
+}
+
+body.theme-light .border-teal-600 {
+  border-color: #0d9488 !important;
+}
+
+body.theme-light .hover\:bg-teal-500\/10:hover {
+  background-color: rgba(13, 148, 136, 0.12) !important;
+}
+
+body.theme-light .text-amber-400 {
+  color: #b45309 !important;
+}
+
+body.theme-light .border-amber-600 {
+  border-color: #b45309 !important;
+}
+
+body.theme-light .hover\:bg-amber-500\/10:hover {
+  background-color: rgba(180, 83, 9, 0.1) !important;
+}
+
+body.theme-light .text-sky-400 {
+  color: #0369a1 !important;
+}
+
+body.theme-light .border-sky-600 {
+  border-color: #0369a1 !important;
+}
+
+body.theme-light .hover\:bg-sky-500\/10:hover {
+  background-color: rgba(3, 105, 161, 0.1) !important;
+}
+
 body.modal-open {
   overflow: hidden;
 }

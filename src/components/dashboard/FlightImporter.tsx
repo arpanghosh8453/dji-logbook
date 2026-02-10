@@ -4,7 +4,7 @@
  * Supports both Tauri (native dialog) and web (HTML file input) modes.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { isWebMode, pickFiles } from '@/lib/api';
 import { useFlightStore } from '@/stores/flightStore';
@@ -111,40 +111,75 @@ export function FlightImporter() {
     }
   };
 
-  // Handle drag and drop
+  // Handle drag and drop (web mode via react-dropzone)
   const onDrop = useCallback(
     async (acceptedFiles: File[]) => {
-      if (acceptedFiles.length > 0) {
-        if (isWebMode()) {
-          // Web mode: File objects are directly usable
-          await processBatch(acceptedFiles);
-        } else {
-          alert(
-            'Please use the "Browse" button to select files. ' +
-              'Drag and drop file paths are not accessible in Tauri apps.'
-          );
-        }
+      if (acceptedFiles.length > 0 && isWebMode()) {
+        await processBatch(acceptedFiles);
       }
     },
     [importLog]
   );
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive: webDragActive } = useDropzone({
     onDrop,
     accept: {
       'text/plain': ['.txt', '.dat', '.log'],
       'text/csv': ['.csv'],
     },
     multiple: true,
-    noClick: true, // Disable click to use our custom button
+    noClick: true,
+    disabled: !isWebMode(), // Disable react-dropzone in Tauri mode
   });
+
+  // Handle drag and drop (Tauri mode via onDragDropEvent)
+  const [tauriDragActive, setTauriDragActive] = useState(false);
+  const processBatchRef = useRef(processBatch);
+  processBatchRef.current = processBatch;
+
+  useEffect(() => {
+    if (isWebMode()) return;
+
+    let unlisten: (() => void) | null = null;
+
+    (async () => {
+      try {
+        const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+        unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+          if (event.payload.type === 'over') {
+            setTauriDragActive(true);
+          } else if (event.payload.type === 'drop') {
+            setTauriDragActive(false);
+            const paths = event.payload.paths;
+            // Filter to supported extensions
+            const supported = paths.filter((p: string) =>
+              /\.(txt|dat|log|csv)$/i.test(p)
+            );
+            if (supported.length > 0) {
+              processBatchRef.current(supported);
+            }
+          } else if (event.payload.type === 'leave') {
+            setTauriDragActive(false);
+          }
+        });
+      } catch (e) {
+        console.warn('Tauri drag-drop listener not available:', e);
+      }
+    })();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const isDragActive = webDragActive || tauriDragActive;
 
   return (
     <div
-      {...getRootProps()}
+      {...(isWebMode() ? getRootProps() : {})}
       className={`drop-zone p-4 text-center ${isDragActive ? 'active' : ''}`}
     >
-      <input {...getInputProps()} />
+      {isWebMode() && <input {...getInputProps()} />}
 
       {isImporting || isBatchProcessing ? (
         <div className="flex flex-col items-center gap-2">

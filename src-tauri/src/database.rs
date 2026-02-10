@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use duckdb::{params, Connection, Result as DuckResult};
 use thiserror::Error;
 
-use crate::models::{BatteryHealthPoint, BatteryUsage, DroneUsage, Flight, FlightDateCount, FlightMetadata, OverviewStats, TelemetryPoint, TelemetryRecord, TopDistanceFlight, TopFlight};
+use crate::models::{BatteryHealthPoint, BatteryUsage, DroneUsage, Flight, FlightDateCount, FlightMetadata, FlightTag, OverviewStats, TelemetryPoint, TelemetryRecord, TopDistanceFlight, TopFlight};
 
 #[derive(Error, Debug)]
 pub enum DatabaseError {
@@ -240,12 +240,49 @@ impl Database {
                 encryption_key  VARCHAR NOT NULL,
                 fetched_at      TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
+
+            -- ============================================================
+            -- FLIGHT_TAGS TABLE: Tags associated with each flight
+            -- Separate table for backward compatibility with old backups
+            -- ============================================================
+            CREATE TABLE IF NOT EXISTS flight_tags (
+                flight_id       BIGINT NOT NULL,
+                tag             VARCHAR NOT NULL,
+                tag_type        VARCHAR NOT NULL DEFAULT 'auto',
+                PRIMARY KEY (flight_id, tag)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_flight_tags_flight 
+                ON flight_tags(flight_id);
+            CREATE INDEX IF NOT EXISTS idx_flight_tags_tag 
+                ON flight_tags(tag);
             "#,
         )?;
+
+        // Migrate: add tag_type column to flight_tags if it doesn't exist yet
+        Self::ensure_flight_tags_has_type(&conn)?;
 
         Self::ensure_telemetry_column_order(&conn)?;
 
         log::info!("Database schema initialized successfully");
+        Ok(())
+    }
+
+    /// Ensure flight_tags table has the tag_type column (migration for older DBs)
+    fn ensure_flight_tags_has_type(conn: &Connection) -> Result<(), DatabaseError> {
+        let mut stmt = conn.prepare("PRAGMA table_info('flight_tags')")?;
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !columns.contains(&"tag_type".to_string()) {
+            log::info!("Migrating flight_tags table: adding tag_type column");
+            conn.execute_batch(
+                "ALTER TABLE flight_tags ADD COLUMN tag_type VARCHAR DEFAULT 'auto';",
+            )?;
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_flight_tags_type ON flight_tags(tag_type);",
+            )?;
+        }
         Ok(())
     }
 
@@ -468,7 +505,7 @@ impl Database {
             "#,
         )?;
 
-        let flights = stmt
+        let mut flights: Vec<Flight> = stmt
             .query_map([], |row| {
                 Ok(Flight {
                     id: row.get(0)?,
@@ -486,19 +523,47 @@ impl Database {
                     home_lat: row.get(12)?,
                     home_lon: row.get(13)?,
                     point_count: row.get(14)?,
+                    tags: Vec::new(),
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
+        // Load all tags and attach to flights
+        // Use a separate query to avoid breaking if flight_tags table doesn't exist yet
+        let tag_map = self.get_all_flight_tags_with_conn(&conn);
+        if let Ok(tags) = tag_map {
+            for flight in &mut flights {
+                if let Some(flight_tags) = tags.get(&flight.id) {
+                    flight.tags = flight_tags.clone();
+                }
+            }
+        }
+
         log::debug!("get_all_flights: {} rows in {:.1}ms", flights.len(), start.elapsed().as_secs_f64() * 1000.0);
         Ok(flights)
+    }
+
+    /// Helper: get all flight tags using an existing connection lock
+    fn get_all_flight_tags_with_conn(&self, conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<FlightTag>>, DatabaseError> {
+        let mut stmt = conn.prepare(
+            "SELECT flight_id, tag, tag_type FROM flight_tags ORDER BY flight_id, tag",
+        )?;
+        let mut map: std::collections::HashMap<i64, Vec<FlightTag>> = std::collections::HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })?;
+        for row in rows {
+            let (flight_id, tag, tag_type) = row?;
+            map.entry(flight_id).or_default().push(FlightTag { tag, tag_type });
+        }
+        Ok(map)
     }
 
     /// Get a single flight by ID (avoids loading all flights)
     pub fn get_flight_by_id(&self, flight_id: i64) -> Result<Flight, DatabaseError> {
         let conn = self.conn.lock().unwrap();
 
-        conn.query_row(
+        let mut flight = conn.query_row(
             r#"
             SELECT 
                 id, file_name, COALESCE(display_name, file_name) AS display_name,
@@ -527,13 +592,31 @@ impl Database {
                     home_lat: row.get(12)?,
                     home_lon: row.get(13)?,
                     point_count: row.get(14)?,
+                    tags: Vec::new(),
                 })
             },
         )
         .map_err(|e| match e {
             duckdb::Error::QueryReturnedNoRows => DatabaseError::FlightNotFound(flight_id),
             other => DatabaseError::DuckDb(other),
-        })
+        })?;
+
+        // Load tags for this flight
+        if let Ok(mut stmt) = conn.prepare("SELECT tag, tag_type FROM flight_tags WHERE flight_id = ? ORDER BY tag") {
+            if let Ok(tags) = stmt
+                .query_map(params![flight_id], |row| {
+                    Ok(FlightTag {
+                        tag: row.get::<_, String>(0)?,
+                        tag_type: row.get::<_, String>(1)?,
+                    })
+                })
+                .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+            {
+                flight.tags = tags;
+            }
+        }
+
+        Ok(flight)
     }
 
     /// Get flight telemetry with automatic downsampling for large datasets.
@@ -752,6 +835,11 @@ impl Database {
             "DELETE FROM telemetry WHERE flight_id = ?",
             params![flight_id],
         )?;
+        // Clean up tags (ignore errors if table doesn't exist in old DBs)
+        let _ = conn.execute(
+            "DELETE FROM flight_tags WHERE flight_id = ?",
+            params![flight_id],
+        );
         conn.execute("DELETE FROM flights WHERE id = ?", params![flight_id])?;
 
         log::info!("Deleted flight {} in {:.1}ms", flight_id, start.elapsed().as_secs_f64() * 1000.0);
@@ -764,6 +852,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
 
         conn.execute("DELETE FROM telemetry", params![])?;
+        let _ = conn.execute("DELETE FROM flight_tags", params![]);
         conn.execute("DELETE FROM flights", params![])?;
 
         log::info!("Deleted all flights and telemetry in {:.1}ms", start.elapsed().as_secs_f64() * 1000.0);
@@ -1002,6 +1091,118 @@ impl Database {
         Ok(())
     }
 
+    // ================================================================
+    // TAG MANAGEMENT
+    // ================================================================
+
+    /// Insert multiple tags for a flight (used during import, always type 'auto')
+    pub fn insert_flight_tags(&self, flight_id: i64, tags: &[String]) -> Result<(), DatabaseError> {
+        if tags.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        for tag in tags {
+            let trimmed = tag.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Use INSERT OR IGNORE to avoid duplicate key errors
+            conn.execute(
+                "INSERT OR IGNORE INTO flight_tags (flight_id, tag, tag_type) VALUES (?, ?, 'auto')",
+                params![flight_id, trimmed],
+            )?;
+        }
+        log::debug!("Inserted {} tags for flight {}", tags.len(), flight_id);
+        Ok(())
+    }
+
+    /// Get all tags for a specific flight
+    pub fn get_flight_tags(&self, flight_id: i64) -> Result<Vec<FlightTag>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT tag, tag_type FROM flight_tags WHERE flight_id = ? ORDER BY tag",
+        )?;
+        let tags = stmt
+            .query_map(params![flight_id], |row| {
+                Ok(FlightTag {
+                    tag: row.get::<_, String>(0)?,
+                    tag_type: row.get::<_, String>(1)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(tags)
+    }
+
+    /// Add a single tag to a flight (manual user-added tag)
+    pub fn add_flight_tag(&self, flight_id: i64, tag: &str) -> Result<(), DatabaseError> {
+        let trimmed = tag.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO flight_tags (flight_id, tag, tag_type) VALUES (?, ?, 'manual')",
+            params![flight_id, trimmed],
+        )?;
+        log::debug!("Added manual tag '{}' to flight {}", trimmed, flight_id);
+        Ok(())
+    }
+
+    /// Remove a single tag from a flight
+    pub fn remove_flight_tag(&self, flight_id: i64, tag: &str) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM flight_tags WHERE flight_id = ? AND tag = ?",
+            params![flight_id, tag.trim()],
+        )?;
+        log::debug!("Removed tag '{}' from flight {}", tag, flight_id);
+        Ok(())
+    }
+
+    /// Get all unique tags across all flights
+    pub fn get_all_unique_tags(&self) -> Result<Vec<String>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT tag FROM flight_tags ORDER BY tag",
+        )?;
+        let tags = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(tags)
+    }
+
+    /// Replace all auto tags for a flight with new ones (keeps manual tags)
+    pub fn replace_auto_tags(&self, flight_id: i64, new_tags: &[String]) -> Result<(), DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        // Delete existing auto tags
+        conn.execute(
+            "DELETE FROM flight_tags WHERE flight_id = ? AND tag_type = 'auto'",
+            params![flight_id],
+        )?;
+        // Insert new auto tags
+        for tag in new_tags {
+            let trimmed = tag.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            conn.execute(
+                "INSERT OR IGNORE INTO flight_tags (flight_id, tag, tag_type) VALUES (?, ?, 'auto')",
+                params![flight_id, trimmed],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Get all flight IDs (for bulk operations like tag regeneration)
+    pub fn get_all_flight_ids(&self) -> Result<Vec<i64>, DatabaseError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT id FROM flights ORDER BY id")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
+
     /// Check if a file has already been imported (by hash)
     pub fn is_file_imported(&self, file_hash: &str) -> Result<bool, DatabaseError> {
         let conn = self.conn.lock().unwrap();
@@ -1034,6 +1235,7 @@ impl Database {
         let flights_path = temp_dir.join("flights.parquet");
         let telemetry_path = temp_dir.join("telemetry.parquet");
         let keychains_path = temp_dir.join("keychains.parquet");
+        let tags_path = temp_dir.join("flight_tags.parquet");
 
         conn.execute_batch(&format!(
             "COPY flights    TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD);",
@@ -1047,6 +1249,11 @@ impl Database {
             "COPY keychains  TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD);",
             keychains_path.to_string_lossy()
         ))?;
+        // Export tags table (ignore error if empty or doesn't exist)
+        let _ = conn.execute_batch(&format!(
+            "COPY flight_tags TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD);",
+            tags_path.to_string_lossy()
+        ));
 
         drop(conn); // release the lock while we tar
 
@@ -1055,7 +1262,7 @@ impl Database {
         let gz = flate2::write::GzEncoder::new(dest_file, flate2::Compression::fast());
         let mut tar = tar::Builder::new(gz);
 
-        for name in &["flights.parquet", "telemetry.parquet", "keychains.parquet"] {
+        for name in &["flights.parquet", "telemetry.parquet", "keychains.parquet", "flight_tags.parquet"] {
             let file_path = temp_dir.join(name);
             if file_path.exists() {
                 tar.append_path_with_name(&file_path, name)
@@ -1160,6 +1367,23 @@ impl Database {
                 "#,
                 keychains_path.to_string_lossy()
             ))?;
+        }
+
+        // --- Restore flight tags (backward compatible — may not exist in old backups) ---
+        let tags_path = temp_dir.join("flight_tags.parquet");
+        if tags_path.exists() {
+            let _ = conn.execute_batch(&format!(
+                r#"
+                DELETE FROM flight_tags
+                WHERE flight_id IN (
+                    SELECT DISTINCT flight_id FROM read_parquet('{}')
+                );
+                INSERT INTO flight_tags
+                SELECT * FROM read_parquet('{}');
+                "#,
+                tags_path.to_string_lossy(),
+                tags_path.to_string_lossy()
+            ));
         }
 
         drop(conn);

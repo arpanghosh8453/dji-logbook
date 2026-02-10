@@ -66,6 +66,7 @@ tar = "0.4"
 
 # File utilities
 dirs = "5"
+reverse_geocoder = "4.1.1"
 
 [features]
 default = ["tauri-app"]
