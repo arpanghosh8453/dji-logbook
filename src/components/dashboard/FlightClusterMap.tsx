@@ -12,6 +12,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Flight } from '@/types';
 import { formatDuration, formatDistance, formatAltitude, formatDateTime } from '@/lib/utils';
 import type { UnitSystem } from '@/lib/utils';
+import { useFlightStore } from '@/stores/flightStore';
 
 // ---------------------------------------------------------------------------
 // Map styles (shared with FlightMap)
@@ -123,6 +124,7 @@ const unclusteredPointLayer: maplibregl.LayerSpecification = {
 
 interface FlightClusterMapProps {
   flights: Flight[];
+  allFlights?: Flight[];  // All flights for reset zoom
   unitSystem: UnitSystem;
   themeMode: 'system' | 'dark' | 'light';
   onSelectFlight?: (flightId: number) => void;
@@ -130,6 +132,7 @@ interface FlightClusterMapProps {
 
 export function FlightClusterMap({
   flights,
+  allFlights,
   unitSystem,
   themeMode,
   onSelectFlight,
@@ -142,6 +145,13 @@ export function FlightClusterMap({
     latitude: number;
     flight: Flight;
   } | null>(null);
+
+  // Map area filter state from store
+  const mapAreaFilterEnabled = useFlightStore((s) => s.mapAreaFilterEnabled);
+  const setMapVisibleBounds = useFlightStore((s) => s.setMapVisibleBounds);
+
+  // Store initial bounds for reset
+  const initialBoundsRef = useRef<{ west: number; south: number; east: number; north: number } | null>(null);
 
   // Track viewport so we can preserve it across style-driven remounts
   const [viewport, setViewport] = useState({
@@ -168,6 +178,70 @@ export function FlightClusterMap({
     () => (isSatellite ? SATELLITE_STYLE : MAP_STYLES[resolvedTheme]),
     [isSatellite, resolvedTheme],
   );
+
+  // Update visible bounds when map moves (only if filter is enabled)
+  const updateBounds = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const bounds = map.getBounds();
+    if (bounds) {
+      const boundsObj = {
+        west: bounds.getWest(),
+        south: bounds.getSouth(),
+        east: bounds.getEast(),
+        north: bounds.getNorth(),
+      };
+      if (mapAreaFilterEnabled) {
+        setMapVisibleBounds(boundsObj);
+      }
+      // Store initial bounds on first load
+      if (!initialBoundsRef.current) {
+        initialBoundsRef.current = boundsObj;
+      }
+    }
+  }, [mapAreaFilterEnabled, setMapVisibleBounds]);
+
+  // When map area filter is enabled, immediately update bounds
+  useEffect(() => {
+    if (mapAreaFilterEnabled) {
+      updateBounds();
+    } else {
+      // Clear bounds when filter is disabled
+      setMapVisibleBounds(null);
+    }
+  }, [mapAreaFilterEnabled, updateBounds, setMapVisibleBounds]);
+
+  // Reset zoom to fit all flights (use allFlights for global view)
+  const handleResetZoom = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    
+    const flightsToFit = allFlights || flights;
+    const coords = flightsToFit
+      .filter((f): f is Flight & { homeLat: number; homeLon: number } =>
+        f.homeLat != null && f.homeLon != null)
+      .map((f) => [f.homeLon, f.homeLat] as [number, number]);
+    
+    if (coords.length === 0) return;
+    
+    if (coords.length === 1) {
+      map.flyTo({ center: coords[0], zoom: 12, duration: 800 });
+      return;
+    }
+
+    let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+    coords.forEach(([lng, lat]) => {
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    });
+
+    map.fitBounds(
+      [[minLng, minLat], [maxLng, maxLat]],
+      { padding: 50, maxZoom: 14, duration: 800 },
+    );
+  }, [flights, allFlights]);
 
   // Build GeoJSON from flights with valid homeLat/homeLon
   const geojson = useMemo(() => {
@@ -302,8 +376,13 @@ export function FlightClusterMap({
 
   if (geojson.features.length === 0) {
     return (
-      <div className="card p-4">
-        <h3 className="text-sm font-semibold text-white mb-3">Flight Locations</h3>
+      <div className={`card p-4 transition-all duration-300 ${mapAreaFilterEnabled ? 'ring-2 ring-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.15)]' : ''}`}>
+        <h3 className="text-sm font-semibold mb-3">
+          <span className="text-white">Flight Locations</span>
+          {mapAreaFilterEnabled && (
+            <span className="text-emerald-400 ml-1">— Global filter active</span>
+          )}
+        </h3>
         <p className="text-sm text-gray-400 text-center py-10">
           No flights with location data available.
         </p>
@@ -312,8 +391,13 @@ export function FlightClusterMap({
   }
 
   return (
-    <div className="card p-4">
-      <h3 className="text-sm font-semibold text-white mb-3">Flight Locations</h3>
+    <div className={`card p-4 transition-all duration-300 ${mapAreaFilterEnabled ? 'ring-2 ring-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.15)]' : ''}`}>
+      <h3 className="text-sm font-semibold mb-3">
+        <span className="text-white">Flight Locations</span>
+        {mapAreaFilterEnabled && (
+          <span className="text-emerald-400 ml-1">— Global filter active</span>
+        )}
+      </h3>
       <div className="relative rounded-lg overflow-hidden" style={{ height: 420 }}>
         <Map
           key={styleMode}
@@ -326,6 +410,8 @@ export function FlightClusterMap({
             const { longitude, latitude, zoom } = evt.viewState;
             setViewport({ longitude, latitude, zoom });
           }}
+          onMoveEnd={updateBounds}
+          onLoad={updateBounds}
           onClick={handleClick}
           interactiveLayerIds={['clusters', 'unclustered-point']}
           onMouseEnter={handleMouseEnter}
@@ -341,6 +427,21 @@ export function FlightClusterMap({
               onChange={setIsSatellite}
             />
           </div>
+
+          {/* Reset zoom button */}
+          <button
+            type="button"
+            onClick={handleResetZoom}
+            className="absolute bottom-2 right-2 z-10 bg-dji-dark/80 border border-gray-700 rounded-lg px-2.5 py-1.5 shadow-lg text-xs text-gray-300 hover:text-white hover:bg-dji-dark transition-colors flex items-center gap-1.5"
+            title="Reset zoom to fit all flights"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              <polyline points="23 1 23 10 14 10" />
+              <polyline points="1 23 1 14 10 14" />
+            </svg>
+            Reset zoom
+          </button>
 
           <Source
             id="flights"

@@ -66,8 +66,8 @@
 - **V13+ Log Support**: Automatic encryption key handling for newer DJI logs
 - **Local-First**: All data stored locally in a single DuckDB database - No sketchy server upload. No need to even upload in DJI's servers, you can copy the log files locally and process them locally (for log decryption, the key will be sent to DJI's server during import, so you need to be online during the first import of a new log file)
 - **Smart Tags**: Automatic flight tagging on import — Night Flight, High Speed, Cold Battery, Low Battery, High Altitude, Long Distance, and more. Offline reverse geocoding adds city, country, and continent tags from takeoff coordinates (no internet needed). Add your own manual tags too. Toggle auto-tagging on/off and regenerate tags for all flights from Settings.
-- **Filters, Search & Sort**: Date range picker, drone/device filter, battery serial filter, duration range slider, tag filter, search, and sorting - shared across flight list and overview. Filter inversion to negate selections. Searchable dropdowns with type-to-filter.
-- **Overview Dashboard**: Aggregate totals, averages, heatmap activity, pie-chart breakdowns (by drone, battery, flight duration), and top-flight highlights - all filtered by sidebar selections
+- **Filters, Search & Sort**: Date range picker, drone/device filter, battery serial filter, duration range slider, tag filter, map area filter, search, and sorting - shared across flight list and overview. Filter inversion to negate selections. Searchable dropdowns with type-to-filter.
+- **Overview Dashboard**: Aggregate totals, averages, heatmap activity with date range selector, pie-chart breakdowns (by drone, battery, flight duration), flight locations cluster map with geographic filter, and top-flight highlights - all filtered by sidebar selections
 - **Battery Health Insights**: Per-battery health bars with inline serial renaming, and per‑minute charge usage history timeline with zoom/scroll
 - **Theme & Units**: Light/Dark/System theme and Metric/Imperial units
 - **Exports**: Direct CSV, JSON, GPX, and KML export from the flight stats bar

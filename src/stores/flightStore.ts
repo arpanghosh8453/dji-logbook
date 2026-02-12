@@ -10,6 +10,7 @@ import type { Flight, FlightDataResponse, ImportResult, OverviewStats } from '@/
 interface FlightState {
   // State
   flights: Flight[];
+  isFlightsInitialized: boolean;  // true after first loadFlights completes
   selectedFlightId: number | null;
   currentFlightData: FlightDataResponse | null;
   overviewStats: OverviewStats | null;
@@ -57,6 +58,12 @@ interface FlightState {
   sidebarFilteredFlightIds: Set<number> | null;
   setSidebarFilteredFlightIds: (ids: Set<number> | null) => void;
 
+  // Overview map area filter
+  mapAreaFilterEnabled: boolean;
+  mapVisibleBounds: { west: number; south: number; east: number; north: number } | null;
+  setMapAreaFilterEnabled: (enabled: boolean) => void;
+  setMapVisibleBounds: (bounds: { west: number; south: number; east: number; north: number } | null) => void;
+
   // Battery name mapping (serial -> custom display name)
   batteryNameMap: Record<string, string>;
   renameBattery: (serial: string, displayName: string) => void;
@@ -71,6 +78,7 @@ interface FlightState {
 export const useFlightStore = create<FlightState>((set, get) => ({
   // Initial state
   flights: [],
+  isFlightsInitialized: false,
   selectedFlightId: null,
   currentFlightData: null,
   overviewStats: null,
@@ -127,7 +135,7 @@ export const useFlightStore = create<FlightState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const flights = await api.getFlights();
-      set({ flights, isLoading: false });
+      set({ flights, isLoading: false, isFlightsInitialized: true });
 
       // Load all tags in background
       get().loadAllTags();
@@ -487,6 +495,12 @@ export const useFlightStore = create<FlightState>((set, get) => ({
   // Sidebar filtered flight IDs
   sidebarFilteredFlightIds: null,
   setSidebarFilteredFlightIds: (ids) => set({ sidebarFilteredFlightIds: ids }),
+
+  // Overview map area filter
+  mapAreaFilterEnabled: false,
+  mapVisibleBounds: null,
+  setMapAreaFilterEnabled: (enabled) => set({ mapAreaFilterEnabled: enabled }),
+  setMapVisibleBounds: (bounds) => set({ mapVisibleBounds: bounds }),
 
   checkForUpdates: async () => {
     set({ updateStatus: 'checking' });

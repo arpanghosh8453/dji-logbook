@@ -29,6 +29,9 @@ export function FlightList({ onSelectFlight }: { onSelectFlight?: (flightId: num
     unitSystem,
     getBatteryDisplayName,
     allTags,
+    mapAreaFilterEnabled,
+    mapVisibleBounds,
+    setMapAreaFilterEnabled,
   } =
     useFlightStore();
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -199,7 +202,7 @@ export function FlightList({ onSelectFlight }: { onSelectFlight?: (flightId: num
     const end = dateRange?.to ? new Date(dateRange.to) : null;
     if (end) end.setHours(23, 59, 59, 999);
 
-    const hasAnyFilter = !!(start || end || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0);
+    const hasAnyFilter = !!(start || end || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0 || (mapAreaFilterEnabled && mapVisibleBounds));
 
     return flights.filter((flight) => {
       // When no filters are active, show all
@@ -248,9 +251,18 @@ export function FlightList({ onSelectFlight }: { onSelectFlight?: (flightId: num
         if (isFilterInverted ? matchesTags : !matchesTags) return false;
       }
 
+      // Map area filter (not affected by inversion - always AND)
+      if (mapAreaFilterEnabled && mapVisibleBounds) {
+        if (flight.homeLat == null || flight.homeLon == null) return false;
+        const { west, south, east, north } = mapVisibleBounds;
+        const inBounds = flight.homeLon >= west && flight.homeLon <= east &&
+                         flight.homeLat >= south && flight.homeLat <= north;
+        if (!inBounds) return false;
+      }
+
       return true;
     });
-  }, [dateRange, flights, selectedBattery, selectedDrone, durationFilterMin, durationFilterMax, selectedTags, isFilterInverted]);
+  }, [dateRange, flights, selectedBattery, selectedDrone, durationFilterMin, durationFilterMax, selectedTags, isFilterInverted, mapAreaFilterEnabled, mapVisibleBounds]);
 
   // Sync filtered flight IDs to the store so Overview can use them
   const setSidebarFilteredFlightIds = useFlightStore((s) => s.setSidebarFilteredFlightIds);
@@ -739,12 +751,12 @@ ${points}
           className="w-full flex items-center justify-between px-3 py-2 text-xs text-gray-400 hover:text-white transition-colors"
         >
           <span className="flex items-center gap-1.5">
-            <span className={`font-medium ${(dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0) ? (isFilterInverted ? 'text-red-400' : 'text-emerald-400') : ''}`}>
-              {dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0
+            <span className={`font-medium ${(dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0 || mapAreaFilterEnabled) ? (isFilterInverted ? 'text-red-400' : 'text-emerald-400') : ''}`}>
+              {dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0 || mapAreaFilterEnabled
                 ? isFilterInverted ? 'Filters — Active — Inverted' : 'Filters — Active'
                 : isFiltersCollapsed ? 'Filters — click to expand' : 'Filters'}
             </span>
-            {(dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0) && (
+            {(dateRange?.from || dateRange?.to || selectedDrone || selectedBattery || durationFilterMin !== null || durationFilterMax !== null || selectedTags.length > 0 || mapAreaFilterEnabled) && (
               <button
                 type="button"
                 onClick={(e) => {
@@ -780,6 +792,31 @@ ${points}
           }`}
         >
         <div className="px-3 pb-3 space-y-3">
+        {/* Map area filter toggle */}
+        <div className="flex items-center justify-between">
+          <label className="text-xs text-gray-400">Overview map area filter</label>
+          <button
+            type="button"
+            onClick={() => setMapAreaFilterEnabled(!mapAreaFilterEnabled)}
+            className="flex items-center gap-2"
+            aria-pressed={mapAreaFilterEnabled}
+          >
+            <span
+              className={`relative inline-flex h-5 w-9 items-center rounded-full border transition-all ${
+                mapAreaFilterEnabled
+                  ? 'bg-dji-primary/90 border-dji-primary'
+                  : 'bg-dji-surface border-gray-600'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                  mapAreaFilterEnabled ? 'translate-x-4' : 'translate-x-0.5'
+                }`}
+              />
+            </span>
+          </button>
+        </div>
+
         {/* Duration range slider */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
@@ -1036,6 +1073,7 @@ ${points}
               setDurationFilterMax(null);
               setSelectedTags([]);
               setIsFilterInverted(false);
+              setMapAreaFilterEnabled(false);
             }}
             className="text-xs text-gray-400 hover:text-white"
           >

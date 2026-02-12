@@ -296,6 +296,7 @@ export function Overview({ stats, flights, unitSystem, onSelectFlight }: Overvie
       {/* Flight Locations Cluster Map */}
       <FlightClusterMap
         flights={filteredFlights}
+        allFlights={flights}
         unitSystem={unitSystem}
         themeMode={themeMode}
         onSelectFlight={onSelectFlight}

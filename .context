@@ -82,12 +82,13 @@
       "Import and parse DJI flight logs (bulk import with cooldown).",
       "Local DuckDB storage with telemetry schema, WAL recovery, and migration support.",
       "Overview analytics page (totals, averages, max altitude, max distance from home).",
-      "Overview activity heatmap (365-day, 7x52 grid).",
+      "Overview activity heatmap (365-day, 7x52 grid) with date range selector.",
       "Overview donut charts for flights by drone model, batteries used, and flight duration (short/mid/long).",
       "Overview top 3 longest and furthest (distance-from-home) flights.",
+      "Overview map area filter: toggle in sidebar filters flights to only those visible on the overview map. Map shows green glow border and 'Global filter active' title when enabled. Reset zoom button fits all flights.",
       "Battery health: per-serial health bars, inline rename (pencil icon, uniqueness-validated, persisted to localStorage), and per-minute usage history plot (scatter + smoothed line) with zoom slider and drag-to-zoom.",
-      "Flight list with rename (pencil icon), delete (trash icon), filters (date range, drone, battery, duration range slider), search, and sorting.",
-      "Flight list sidebar: collapsible Filters section (default collapsed) and Import section (default expanded), both persisted to localStorage with 'click to expand' hints.",
+      "Flight list with rename (pencil icon), delete (trash icon), filters (date range, drone, battery, duration range slider, map area), search, and sorting.",
+      "Flight list sidebar: collapsible Filters section (default collapsed) and Import section (auto-collapsed when flights exist, auto-expanded when empty).",
       "Overview uses sidebar-filtered flights via Zustand store (sidebarFilteredFlightIds) instead of its own filter bar.",
       "Settings: API key, units (metric/imperial), theme (light/dark/system), delete-all logs.",
       "Settings: shows app data + log directory for troubleshooting.",
@@ -288,6 +289,14 @@
       "weather_modal_fix": "WeatherModal.tsx: Rendered via createPortal to document.body (escapes parent stacking contexts). Adds modal-open class to body for scrollbar suppression.",
       "replay_telemetry_overlay": "FlightMap.tsx: New telemetry prop from Dashboard. replayTelemetry memo interpolates all telemetry fields at replay position. Fixed overlay (top-right, map-overlay style) shows height, speed, distance, battery (color-coded), voltage, temp, satellites, pitch/roll/yaw, and lat/lng. Hover tooltip paused during replay.",
       "telemetry_toggle_rename": "FlightMap.tsx: Toggle label renamed from 'Tooltip' to 'Telemetry'."
+    },
+    "map_area_filter_and_import_ux": {
+      "description": "Overview map area filter for geographic filtering, import section auto-collapse, and UI polish.",
+      "map_area_filter": "FlightList.tsx: New 'Overview map area filter' toggle in sidebar filters. When enabled, filters flights to only those with home coordinates visible on the overview map. FlightClusterMap.tsx: Tracks map bounds via onMoveEnd/onLoad handlers, passes bounds to store. Filter integrated into filteredFlights useMemo with bounds check.",
+      "map_visual_feedback": "FlightClusterMap.tsx: When filter active, map card shows green glow border (ring-2 ring-emerald-500/40 shadow) and title changes to 'Flight Locations — Global filter active' in emerald. mapAreaFilterEnabled added to 'Filters — Active' header check.",
+      "reset_zoom_button": "FlightClusterMap.tsx: 'Reset zoom' button in bottom-right corner. Uses allFlights prop (all flights, not just filtered) to fit bounds to entire dataset.",
+      "import_auto_collapse": "Dashboard.tsx: Import section now auto-collapses when flights exist in database, auto-expands when empty. Uses new isFlightsInitialized store state to wait for DB load before determining collapsed state. No longer persisted to localStorage.",
+      "store_changes": "flightStore.ts: Added isFlightsInitialized (true after first loadFlights), mapAreaFilterEnabled, mapVisibleBounds, setMapAreaFilterEnabled, setMapVisibleBounds."
     }
   },
   "behavior": {
