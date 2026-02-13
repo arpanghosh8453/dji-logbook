@@ -14,6 +14,7 @@ export interface Flight {
   id: number;
   fileName: string;
   displayName: string;
+  fileHash: string | null;
   droneModel: string | null;
   droneSerial: string | null;
   aircraftName: string | null;
@@ -132,6 +133,7 @@ export interface ImportResult {
   flightId: number | null;
   message: string;
   pointCount: number;
+  fileHash: string | null;
 }
 
 /** Flight statistics */

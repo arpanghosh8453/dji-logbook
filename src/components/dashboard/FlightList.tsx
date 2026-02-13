@@ -17,6 +17,7 @@ import { formatDuration, formatDateTime, formatDistance } from '@/lib/utils';
 import { DayPicker, type DateRange } from 'react-day-picker';
 import type { FlightDataResponse, Flight, TelemetryData } from '@/types';
 import { Select } from '@/components/ui/Select';
+import { addToBlacklist } from './FlightImporter';
 import 'react-day-picker/dist/style.css';
 
 export function FlightList({ onSelectFlight }: { onSelectFlight?: (flightId: number) => void } = {}) {
@@ -850,6 +851,12 @@ ${points}
       for (let i = 0; i < filteredFlights.length; i++) {
         const flight = filteredFlights[i];
         setDeleteProgress({ done: i, total: filteredFlights.length, currentFile: flight.fileName || '' });
+        
+        // Add to blacklist before deleting (so sync won't re-import)
+        if (flight.fileHash) {
+          addToBlacklist(flight.fileHash);
+        }
+        
         await deleteFlight(flight.id);
       }
 
@@ -1706,6 +1713,10 @@ ${points}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
+                  // Add to blacklist before deleting (so sync won't re-import)
+                  if (flight.fileHash) {
+                    addToBlacklist(flight.fileHash);
+                  }
                   deleteFlight(flight.id);
                   setConfirmDeleteId(null);
                 }}

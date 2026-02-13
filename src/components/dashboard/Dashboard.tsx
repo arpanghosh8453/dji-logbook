@@ -6,12 +6,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useFlightStore } from '@/stores/flightStore';
 import { FlightList } from './FlightList';
-import { FlightImporter } from './FlightImporter';
+import { FlightImporter, getSyncFolderPath, setSyncFolderPath } from './FlightImporter';
 import { FlightStats } from './FlightStats';
 import { SettingsModal } from './SettingsModal';
 import { TelemetryCharts } from '@/components/charts/TelemetryCharts';
 import { FlightMap } from '@/components/map/FlightMap';
 import { Overview } from './Overview';
+import { isWebMode } from '@/lib/api';
 
 export function Dashboard() {
   const {
@@ -220,20 +221,61 @@ export function Dashboard() {
 
         {/* Flight Importer */}
         <div className="border-b border-gray-700 flex-shrink-0">
-          <button
-            type="button"
-            onClick={() => setIsImporterCollapsed((v) => !v)}
-            className="w-full flex items-center justify-between px-3 py-2 text-xs text-gray-400 hover:text-white transition-colors"
-          >
-            <span className="font-medium">{isImporterCollapsed !== false ? 'Import — click to expand' : 'Import'}</span>
-            <span
-              className={`w-5 h-5 rounded-full border border-gray-600 flex items-center justify-center transition-transform duration-200 ${
-                isImporterCollapsed !== false ? 'rotate-180' : ''
-              }`}
+          <div className="flex items-center justify-between px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setIsImporterCollapsed((v) => !v)}
+              className="flex items-center gap-2 text-xs text-gray-400 hover:text-white transition-colors"
             >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
-            </span>
-          </button>
+              <span className="font-medium">{isImporterCollapsed !== false ? 'Import — click to expand' : 'Import'}</span>
+              <span
+                className={`w-5 h-5 rounded-full border border-gray-600 flex items-center justify-center transition-transform duration-200 ${
+                  isImporterCollapsed !== false ? 'rotate-180' : ''
+                }`}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+              </span>
+            </button>
+            {/* Sync Folder Config Button (desktop only) */}
+            {!isWebMode() && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const { open } = await import('@tauri-apps/plugin-dialog');
+                    const selected = await open({
+                      directory: true,
+                      multiple: false,
+                      title: 'Select Sync Folder',
+                    });
+                    if (selected && typeof selected === 'string') {
+                      setSyncFolderPath(selected);
+                      // Force re-render by triggering a state update
+                      window.dispatchEvent(new CustomEvent('syncFolderChanged'));
+                    }
+                  } catch (e) {
+                    console.error('Failed to select sync folder:', e);
+                  }
+                }}
+                className={`p-1.5 rounded transition-colors ${
+                  getSyncFolderPath()
+                    ? 'text-emerald-500 hover:text-emerald-400 dark:text-emerald-400 dark:hover:text-emerald-300 hover:bg-emerald-500/10'
+                    : 'text-red-400 hover:text-red-300 dark:text-red-500 dark:hover:text-red-400 hover:bg-red-500/10'
+                }`}
+                title={getSyncFolderPath() ? `Sync folder: ${getSyncFolderPath()}` : 'Configure sync folder'}
+              >
+                {getSyncFolderPath() ? (
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                )}
+              </button>
+            )}
+          </div>
           <div
             className={`transition-all duration-200 ease-in-out ${
               isImporterCollapsed !== false ? 'max-h-0 overflow-hidden opacity-0' : 'max-h-[300px] overflow-visible opacity-100'

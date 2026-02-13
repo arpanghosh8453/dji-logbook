@@ -263,6 +263,7 @@ export const useFlightStore = create<FlightState>((set, get) => ({
         flightId: null,
         message: errorMessage,
         pointCount: 0,
+        fileHash: null,
       };
     }
   },

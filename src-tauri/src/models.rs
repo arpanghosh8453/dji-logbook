@@ -35,6 +35,7 @@ pub struct Flight {
     pub id: i64,
     pub file_name: String,
     pub display_name: String,
+    pub file_hash: Option<String>,
     pub drone_model: Option<String>,
     pub drone_serial: Option<String>,
     pub aircraft_name: Option<String>,
@@ -427,6 +428,7 @@ pub struct ImportResult {
     pub flight_id: Option<i64>,
     pub message: String,
     pub point_count: usize,
+    pub file_hash: Option<String>,
 }
 
 /// Statistics for a flight

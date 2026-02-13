@@ -3,16 +3,77 @@
  * Handles file selection and invokes the Rust import command.
  * Supports both Tauri (native dialog) and web (HTML file input) modes.
  * 
- * Optimizations:
+ * Features:
  * - Batch imports defer flight list refresh until all files complete
  * - Personal API keys bypass cooldown entirely
  * - Progressive UI updates show import progress without expensive refreshes
+ * - Sync folder support for automatic imports from a configured directory
+ * - Blacklist support for deleted files (skipped during sync)
  */
 
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { isWebMode, pickFiles } from '@/lib/api';
 import { useFlightStore } from '@/stores/flightStore';
+
+// Storage keys for sync folder and blacklist
+const SYNC_FOLDER_KEY = 'syncFolderPath';
+const BLACKLIST_KEY = 'importBlacklist';
+
+// Get sync folder path from localStorage
+export function getSyncFolderPath(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  return localStorage.getItem(SYNC_FOLDER_KEY);
+}
+
+// Set sync folder path in localStorage
+export function setSyncFolderPath(path: string | null): void {
+  if (typeof localStorage === 'undefined') return;
+  if (path) {
+    localStorage.setItem(SYNC_FOLDER_KEY, path);
+  } else {
+    localStorage.removeItem(SYNC_FOLDER_KEY);
+  }
+}
+
+// Get blacklisted file hashes (used when deleting flights)
+export function getBlacklist(): Set<string> {
+  if (typeof localStorage === 'undefined') return new Set();
+  try {
+    const stored = localStorage.getItem(BLACKLIST_KEY);
+    return stored ? new Set(JSON.parse(stored)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+// Add hash to blacklist (called when deleting a flight)
+export function addToBlacklist(hash: string): void {
+  if (typeof localStorage === 'undefined' || !hash) return;
+  const blacklist = getBlacklist();
+  blacklist.add(hash);
+  localStorage.setItem(BLACKLIST_KEY, JSON.stringify([...blacklist]));
+}
+
+// Remove hash from blacklist (when manually importing)
+export function removeFromBlacklist(hash: string): void {
+  if (typeof localStorage === 'undefined' || !hash) return;
+  const blacklist = getBlacklist();
+  blacklist.delete(hash);
+  localStorage.setItem(BLACKLIST_KEY, JSON.stringify([...blacklist]));
+}
+
+// Clear entire blacklist (e.g., when user wants to reset)
+export function clearBlacklist(): void {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.removeItem(BLACKLIST_KEY);
+}
+
+// Check if a hash is blacklisted
+export function isBlacklisted(hash: string | null | undefined): boolean {
+  if (!hash) return false;
+  return getBlacklist().has(hash);
+}
 
 export function FlightImporter() {
   const { importLog, isImporting, apiKeyType, loadApiKeyType } = useFlightStore();
@@ -22,6 +83,19 @@ export function FlightImporter() {
   const [currentFileName, setCurrentFileName] = useState<string | null>(null);
   const [batchIndex, setBatchIndex] = useState(0);
   const [batchTotal, setBatchTotal] = useState(0);
+  const [syncFolderPath, setSyncFolderPathState] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  // Load sync folder path on mount and listen for changes from Dashboard
+  useEffect(() => {
+    setSyncFolderPathState(getSyncFolderPath());
+    
+    const handleSyncFolderChanged = () => {
+      setSyncFolderPathState(getSyncFolderPath());
+    };
+    window.addEventListener('syncFolderChanged', handleSyncFolderChanged);
+    return () => window.removeEventListener('syncFolderChanged', handleSyncFolderChanged);
+  }, []);
 
   // Load API key type on mount to determine cooldown behavior
   useEffect(() => {
@@ -43,8 +117,10 @@ export function FlightImporter() {
    * - Personal API keys: no cooldown, optimized batch import
    * - Default API key: cooldown between files, sequential import
    * - Flight list refreshes periodically so user sees progress
+   * - isManualImport: if true, removes files from blacklist (allows re-importing deleted files)
+   *                   if false (sync), checks blacklist BEFORE importing and skips blacklisted files
    */
-  const processBatch = async (items: (string | File)[]) => {
+  const processBatch = async (items: (string | File)[], isManualImport = true) => {
     if (items.length === 0) return;
 
     setBatchMessage(null);
@@ -63,13 +139,35 @@ export function FlightImporter() {
       // Don't await - let it run in background
       loadFlights().then(() => loadAllTags());
     };
+
+    // Get blacklist for sync mode (check before import to avoid wasted work)
+    const blacklist = !isManualImport ? getBlacklist() : new Set<string>();
+    
+    // Helper to check if file is blacklisted (for sync mode only)
+    // Returns hash if blacklisted, null otherwise
+    const checkBlacklist = async (item: string | File): Promise<string | null> => {
+      if (isManualImport || blacklist.size === 0) return null;
+      
+      // Only works for file paths in Tauri mode
+      if (typeof item !== 'string') return null;
+      
+      try {
+        const { computeFileHash } = await import('@/lib/api');
+        const hash = await computeFileHash(item);
+        return blacklist.has(hash) ? hash : null;
+      } catch {
+        // If hash computation fails, proceed with import
+        return null;
+      }
+    };
     
     if (hasPersonalKey) {
       // Optimized path: batch import without cooldown
       // Refresh flight list every 2 files to show progress
       let processed = 0;
       let skipped = 0;
-      let failed = 0;
+      let invalidFiles = 0;
+      let blacklisted = 0;
       const REFRESH_INTERVAL = 2;
 
       for (let index = 0; index < items.length; index += 1) {
@@ -83,16 +181,28 @@ export function FlightImporter() {
             : `${item.name.slice(0, 50)}…`;
         setCurrentFileName(name);
 
+        // For sync mode: check blacklist BEFORE importing (much faster than import+delete)
+        const blacklistedHash = await checkBlacklist(item);
+        if (blacklistedHash) {
+          blacklisted += 1;
+          continue;
+        }
+
         // Import without refreshing flight list (skipRefresh = true)
         const result = await importLog(item, true);
         if (!result.success) {
           if (result.message.toLowerCase().includes('already been imported')) {
             skipped += 1;
           } else {
-            failed += 1;
+            // Parse errors, corrupt files, non-DJI files, timeouts, etc.
+            invalidFiles += 1;
           }
         } else {
           processed += 1;
+          // For manual import, remove from blacklist (allows re-importing)
+          if (isManualImport && result.fileHash) {
+            removeFromBlacklist(result.fileHash);
+          }
           // Refresh flight list periodically so user sees progress
           if (processed % REFRESH_INTERVAL === 0) {
             refreshFlightListBackground();
@@ -117,7 +227,8 @@ export function FlightImporter() {
       const parts: string[] = [];
       if (processed > 0) parts.push(`${processed} file${processed === 1 ? '' : 's'} processed`);
       if (skipped > 0) parts.push(`${skipped} skipped (already imported)`);
-      if (failed > 0) parts.push(`${failed} failed`);
+      if (blacklisted > 0) parts.push(`${blacklisted} skipped (blacklisted)`);
+      if (invalidFiles > 0) parts.push(`${invalidFiles} skipped (non-DJI files)`);
       setBatchMessage(`Import finished. ${parts.join(', ')}.`);
       
     } else {
@@ -125,6 +236,8 @@ export function FlightImporter() {
       // Refresh flight list after each successful import (during cooldown)
       let skipped = 0;
       let processed = 0;
+      let blacklisted = 0;
+      let invalidFiles = 0;
 
       for (let index = 0; index < items.length; index += 1) {
         const item = items[index];
@@ -138,16 +251,32 @@ export function FlightImporter() {
             : `${item.name.slice(0, 50)}…`;
         setCurrentFileName(name);
         
+        // For sync mode: check blacklist BEFORE importing (much faster than import+delete)
+        const blacklistedHash = await checkBlacklist(item);
+        if (blacklistedHash) {
+          blacklisted += 1;
+          continue;
+        }
+        
         // Use skipRefresh=true to defer refresh until batch completes
         const result = await importLog(item, true);
         if (!result.success) {
           if (result.message.toLowerCase().includes('already been imported')) {
             skipped += 1;
           } else {
-            alert(result.message);
+            // Parse errors, corrupt files, non-DJI files, timeouts, etc.
+            // Only show alert for manual imports, silently skip for sync
+            invalidFiles += 1;
+            if (isManualImport) {
+              console.warn(`Failed to import: ${result.message}`);
+            }
           }
         } else {
           processed += 1;
+          // For manual import, remove from blacklist (allows re-importing)
+          if (isManualImport && result.fileHash) {
+            removeFromBlacklist(result.fileHash);
+          }
           // Refresh flight list in background while cooldown runs
           // This way user sees new flights appear during the wait
           refreshFlightListBackground();
@@ -171,16 +300,14 @@ export function FlightImporter() {
       setCurrentFileName(null);
       setBatchTotal(0);
       setBatchIndex(0);
-      if (skipped > 0) {
-        setBatchMessage(
-          `Import finished. ${processed} file${processed === 1 ? '' : 's'} processed, ` +
-            `${skipped} file${skipped === 1 ? '' : 's'} skipped (already imported).`
-        );
-      } else {
-        setBatchMessage(
-          `Import finished. ${processed} file${processed === 1 ? '' : 's'} processed.`
-        );
-      }
+      
+      // Build completion message
+      const parts: string[] = [];
+      if (processed > 0) parts.push(`${processed} file${processed === 1 ? '' : 's'} processed`);
+      if (skipped > 0) parts.push(`${skipped} skipped (already imported)`);
+      if (blacklisted > 0) parts.push(`${blacklisted} skipped (blacklisted)`);
+      if (invalidFiles > 0) parts.push(`${invalidFiles} skipped (non-DJI files)`);
+      setBatchMessage(`Import finished. ${parts.join(', ')}.`);
     }
   };
 
@@ -277,6 +404,60 @@ export function FlightImporter() {
 
   const isDragActive = webDragActive || tauriDragActive;
 
+  // Handle sync button click
+  const handleSync = async () => {
+    if (isWebMode()) {
+      alert('Sync feature is only available in the desktop app.');
+      return;
+    }
+
+    const folderPath = getSyncFolderPath();
+    if (!folderPath) {
+      setBatchMessage('NO_SYNC_FOLDER');
+      return;
+    }
+
+    setIsSyncing(true);
+    setBatchMessage(null);
+
+    try {
+      // Read directory contents using Tauri
+      const { readDir } = await import('@tauri-apps/plugin-fs');
+      const entries = await readDir(folderPath);
+      
+      // Filter for top-level .txt files only
+      const txtFiles = entries
+        .filter((entry) => {
+          // Only files (not directories) with .txt extension
+          return entry.isFile && entry.name?.toLowerCase().endsWith('.txt');
+        })
+        .map((entry) => `${folderPath}/${entry.name}`);
+
+      if (txtFiles.length === 0) {
+        setBatchMessage('No .txt files found in sync folder.');
+        setIsSyncing(false);
+        return;
+      }
+
+      // For sync, we pass isManualImport=false so blacklisted files are checked
+      // The processBatch function will check each file's hash against the blacklist
+      // after import and delete any that match (files user previously deleted)
+      setIsSyncing(false);
+      await processBatch(txtFiles, false); // isManualImport = false for sync
+    } catch (e) {
+      console.error('Sync failed:', e);
+      setBatchMessage(`Sync failed: ${e}`);
+      setIsSyncing(false);
+    }
+  };
+
+  // Get short folder name for display
+  const getSyncFolderDisplayName = () => {
+    if (!syncFolderPath) return null;
+    const parts = syncFolderPath.replace(/\\/g, '/').split('/');
+    return parts[parts.length - 1] || syncFolderPath;
+  };
+
   return (
     <div
       {...(isWebMode() ? getRootProps() : {})}
@@ -284,12 +465,14 @@ export function FlightImporter() {
     >
       {isWebMode() && <input {...getInputProps()} />}
 
-      {isImporting || isBatchProcessing ? (
+      {isImporting || isBatchProcessing || isSyncing ? (
         <div className="flex flex-col items-center gap-2">
           <div className="w-6 h-6 border-2 border-dji-primary border-t-transparent rounded-full spinner" />
           <span className="text-sm text-gray-400">
             {cooldownRemaining > 0
               ? `Cooling down... ${cooldownRemaining}s`
+              : isSyncing
+              ? 'Scanning sync folder...'
               : currentFileName
               ? `Importing ${currentFileName}...`
               : 'Importing...'}
@@ -324,15 +507,54 @@ export function FlightImporter() {
               : 'Import a DJI flight log'}
           </p>
 
-          <button
-            onClick={handleBrowse}
-            className="btn-primary text-sm py-1.5 px-3 force-white"
-            disabled={isImporting || isBatchProcessing}
-          >
-            Browse Files
-          </button>
+          <div className="flex gap-2 justify-center">
+            <button
+              onClick={handleBrowse}
+              className="btn-primary text-sm py-1.5 px-3 force-white flex-1 max-w-[100px]"
+              disabled={isImporting || isBatchProcessing || isSyncing}
+            >
+              Browse
+            </button>
+            {!isWebMode() && (
+              <button
+                onClick={handleSync}
+                className="btn-primary text-sm py-1.5 px-3 force-white flex-1 max-w-[100px]"
+                disabled={isImporting || isBatchProcessing || isSyncing}
+                title={syncFolderPath ? `Sync from: ${getSyncFolderDisplayName()}` : 'Configure sync folder first'}
+              >
+                <div className="flex items-center justify-center gap-1">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Sync
+                </div>
+              </button>
+            )}
+          </div>
+          
+          {/* Sync folder status */}
+          {!isWebMode() && syncFolderPath && (
+            <p className="mt-2 text-[10px] text-gray-500 truncate max-w-full" title={syncFolderPath}>
+              Sync: {getSyncFolderDisplayName()}
+            </p>
+          )}
+          
           {batchMessage && (
-            <p className="mt-2 text-xs text-gray-400">{batchMessage}</p>
+            batchMessage === 'NO_SYNC_FOLDER' ? (
+              <div className="mt-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                <div className="flex items-center gap-2 text-amber-400">
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  <span className="text-xs font-medium">No sync folder configured</span>
+                </div>
+                <p className="mt-1 text-[10px] text-amber-300">
+                  Click the folder icon in the header above to select a folder for automatic syncing.
+                </p>
+              </div>
+            ) : (
+              <p className="mt-2 text-xs text-gray-400">{batchMessage}</p>
+            )
           )}
         </>
       )}

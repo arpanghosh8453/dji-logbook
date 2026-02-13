@@ -58,6 +58,11 @@ impl Database {
         // Configure DuckDB for optimal performance
         Self::configure_connection(&conn)?;
 
+        // Checkpoint WAL to main database file for faster subsequent startups
+        if let Err(e) = conn.execute_batch("CHECKPOINT;") {
+            log::warn!("WAL checkpoint failed (non-fatal): {}", e);
+        }
+
         let db = Self {
             conn: Mutex::new(conn),
             data_dir: app_data_dir,
@@ -562,6 +567,7 @@ impl Database {
             r#"
             SELECT 
                 id, file_name, COALESCE(display_name, file_name) AS display_name,
+                file_hash,
                 drone_model, drone_serial, aircraft_name, battery_serial,
                 CAST(start_time AS VARCHAR) AS start_time,
                 duration_secs, total_distance,
@@ -577,18 +583,19 @@ impl Database {
                     id: row.get(0)?,
                     file_name: row.get(1)?,
                     display_name: row.get(2)?,
-                    drone_model: row.get(3)?,
-                    drone_serial: row.get(4)?,
-                    aircraft_name: row.get(5)?,
-                    battery_serial: row.get(6)?,
-                    start_time: row.get(7)?,
-                    duration_secs: row.get(8)?,
-                    total_distance: row.get(9)?,
-                    max_altitude: row.get(10)?,
-                    max_speed: row.get(11)?,
-                    home_lat: row.get(12)?,
-                    home_lon: row.get(13)?,
-                    point_count: row.get(14)?,
+                    file_hash: row.get(3)?,
+                    drone_model: row.get(4)?,
+                    drone_serial: row.get(5)?,
+                    aircraft_name: row.get(6)?,
+                    battery_serial: row.get(7)?,
+                    start_time: row.get(8)?,
+                    duration_secs: row.get(9)?,
+                    total_distance: row.get(10)?,
+                    max_altitude: row.get(11)?,
+                    max_speed: row.get(12)?,
+                    home_lat: row.get(13)?,
+                    home_lon: row.get(14)?,
+                    point_count: row.get(15)?,
                     tags: Vec::new(),
                 })
             })?
@@ -633,7 +640,7 @@ impl Database {
             r#"
             SELECT 
                 id, file_name, COALESCE(display_name, file_name) AS display_name,
-                drone_model, drone_serial, aircraft_name, battery_serial,
+                file_hash, drone_model, drone_serial, aircraft_name, battery_serial,
                 CAST(start_time AS VARCHAR) AS start_time,
                 duration_secs, total_distance,
                 max_altitude, max_speed, home_lat, home_lon, point_count
@@ -646,18 +653,19 @@ impl Database {
                     id: row.get(0)?,
                     file_name: row.get(1)?,
                     display_name: row.get(2)?,
-                    drone_model: row.get(3)?,
-                    drone_serial: row.get(4)?,
-                    aircraft_name: row.get(5)?,
-                    battery_serial: row.get(6)?,
-                    start_time: row.get(7)?,
-                    duration_secs: row.get(8)?,
-                    total_distance: row.get(9)?,
-                    max_altitude: row.get(10)?,
-                    max_speed: row.get(11)?,
-                    home_lat: row.get(12)?,
-                    home_lon: row.get(13)?,
-                    point_count: row.get(14)?,
+                    file_hash: row.get(3)?,
+                    drone_model: row.get(4)?,
+                    drone_serial: row.get(5)?,
+                    aircraft_name: row.get(6)?,
+                    battery_serial: row.get(7)?,
+                    start_time: row.get(8)?,
+                    duration_secs: row.get(9)?,
+                    total_distance: row.get(10)?,
+                    max_altitude: row.get(11)?,
+                    max_speed: row.get(12)?,
+                    home_lat: row.get(13)?,
+                    home_lon: row.get(14)?,
+                    point_count: row.get(15)?,
                     tags: Vec::new(),
                 })
             },

@@ -70,6 +70,7 @@ mod tauri_app {
                 flight_id: None,
                 message: "File not found".to_string(),
                 point_count: 0,
+                file_hash: None,
             });
         }
 
@@ -84,6 +85,7 @@ mod tauri_app {
                     flight_id: None,
                     message: "This flight log has already been imported".to_string(),
                     point_count: 0,
+                    file_hash: None,
                 });
             }
             Err(e) => {
@@ -93,6 +95,7 @@ mod tauri_app {
                     flight_id: None,
                     message: format!("Failed to parse log: {}", e),
                     point_count: 0,
+                    file_hash: None,
                 });
             }
         };
@@ -118,6 +121,7 @@ mod tauri_app {
                     flight_id: None,
                     message: format!("Failed to insert telemetry data: {}", e),
                     point_count: 0,
+                    file_hash: parse_result.metadata.file_hash.clone(),
                 });
             }
         };
@@ -151,7 +155,20 @@ mod tauri_app {
             flight_id: Some(flight_id),
             message: format!("Successfully imported {} telemetry points", point_count),
             point_count,
+            file_hash: parse_result.metadata.file_hash.clone(),
         })
+    }
+
+    /// Compute SHA256 hash of a file without importing it
+    /// Used to check if a file is blacklisted before importing
+    #[tauri::command]
+    pub fn compute_file_hash(file_path: String) -> Result<String, String> {
+        let path = PathBuf::from(&file_path);
+        if !path.exists() {
+            return Err("File not found".to_string());
+        }
+        LogParser::calculate_file_hash(&path)
+            .map_err(|e| format!("Failed to compute hash: {}", e))
     }
 
     #[tauri::command]
@@ -544,6 +561,7 @@ mod tauri_app {
             })
             .invoke_handler(tauri::generate_handler![
                 import_log,
+                compute_file_hash,
                 get_flights,
                 get_flight_data,
                 get_overview_stats,

@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import * as api from '@/lib/api';
 import { useFlightStore } from '@/stores/flightStore';
 import { Select } from '@/components/ui/Select';
+import { getBlacklist, clearBlacklist } from './FlightImporter';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -22,6 +23,8 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
   const [appLogDir, setAppLogDir] = useState('');
   const [appVersion, setAppVersion] = useState('');
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [confirmClearBlacklist, setConfirmClearBlacklist] = useState(false);
+  const [blacklistCount, setBlacklistCount] = useState(0);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -97,6 +100,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       getAppLogDir();
       loadSmartTagsEnabled();
       fetchAppVersion();
+      setBlacklistCount(getBlacklist().size);
     }
   }, [isOpen]);
 
@@ -677,6 +681,46 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 >
                   Delete all logs
                 </button>
+              )}
+
+              {/* Clear Sync Blacklist */}
+              {blacklistCount > 0 && (
+                <>
+                  {confirmClearBlacklist ? (
+                    <div className="mt-3 rounded-lg border border-amber-600/60 bg-amber-500/10 p-3">
+                      <p className="text-xs text-amber-200">
+                        Clear the sync blacklist? This will allow previously deleted files to be re-imported during sync.
+                      </p>
+                      <div className="mt-2 flex items-center gap-3">
+                        <button
+                          onClick={() => {
+                            clearBlacklist();
+                            setBlacklistCount(0);
+                            setConfirmClearBlacklist(false);
+                            setMessage({ type: 'success', text: 'Blacklist cleared.' });
+                          }}
+                          className="text-xs text-amber-300 hover:text-amber-200"
+                        >
+                          Yes
+                        </button>
+                        <button
+                          onClick={() => setConfirmClearBlacklist(false)}
+                          className="text-xs text-gray-400 hover:text-gray-200"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmClearBlacklist(true)}
+                      disabled={isBusy}
+                      className="mt-3 w-full py-2 px-3 rounded-lg border border-amber-600 text-amber-500 hover:bg-amber-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    >
+                      Clear sync blacklist ({blacklistCount} {blacklistCount === 1 ? 'file' : 'files'})
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>

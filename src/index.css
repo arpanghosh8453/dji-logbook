@@ -197,11 +197,31 @@ body.theme-light .hover\:bg-teal-500\/10:hover {
 }
 
 body.theme-light .text-amber-400 {
-  color: #b45309 !important;
+  color: #92400e !important;
+}
+
+body.theme-light .text-amber-300 {
+  color: #78350f !important;
+}
+
+body.theme-light .text-amber-200 {
+  color: #451a03 !important;
 }
 
 body.theme-light .border-amber-600 {
   border-color: #b45309 !important;
+}
+
+body.theme-light .border-amber-600\/60 {
+  border-color: rgba(180, 83, 9, 0.6) !important;
+}
+
+body.theme-light .border-amber-500\/30 {
+  border-color: rgba(180, 83, 9, 0.4) !important;
+}
+
+body.theme-light .bg-amber-500\/10 {
+  background-color: rgba(251, 191, 36, 0.15) !important;
 }
 
 body.theme-light .hover\:bg-amber-500\/10:hover {
@@ -838,6 +858,12 @@ body.theme-light .echarts-tooltip .tooltip-time-tag {
 /* Loading spinner */
 .spinner {
   animation: spin 1s linear infinite;
+}
+
+/* Light mode: ensure spinner border is visible */
+body.theme-light .spinner.border-dji-primary {
+  border-color: rgb(0, 122, 204) !important;
+  border-top-color: transparent !important;
 }
 
 @keyframes spin {

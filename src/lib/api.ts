@@ -118,6 +118,18 @@ export async function importLog(
   return invoke('import_log', { filePath: fileOrPath as string }) as Promise<ImportResult>;
 }
 
+/**
+ * Compute file hash without importing.
+ * Tauri-only: used to check blacklist before importing.
+ */
+export async function computeFileHash(filePath: string): Promise<string> {
+  if (isWeb) {
+    throw new Error('File hash computation is not supported in web mode.');
+  }
+  const invoke = await getTauriInvoke();
+  return invoke('compute_file_hash', { filePath }) as Promise<string>;
+}
+
 export async function deleteFlight(flightId: number): Promise<boolean> {
   if (isWeb) {
     return fetchJson<boolean>(`/flights/delete?flight_id=${flightId}`, {

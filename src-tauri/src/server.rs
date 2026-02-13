@@ -90,6 +90,7 @@ async fn import_log(
                 flight_id: None,
                 message: "This flight log has already been imported".to_string(),
                 point_count: 0,
+                file_hash: None,
             }));
         }
         Err(e) => {
@@ -100,6 +101,7 @@ async fn import_log(
                 flight_id: None,
                 message: format!("Failed to parse log: {}", e),
                 point_count: 0,
+                file_hash: None,
             }));
         }
     };
@@ -126,6 +128,7 @@ async fn import_log(
                 flight_id: None,
                 message: format!("Failed to insert telemetry data: {}", e),
                 point_count: 0,
+                file_hash: parse_result.metadata.file_hash.clone(),
             }));
         }
     };
@@ -159,6 +162,7 @@ async fn import_log(
         flight_id: Some(flight_id),
         message: format!("Successfully imported {} telemetry points", point_count),
         point_count,
+        file_hash: parse_result.metadata.file_hash.clone(),
     }))
 }
 
