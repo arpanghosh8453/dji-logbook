@@ -26,6 +26,7 @@ export function Dashboard() {
     loadOverview,
     supporterBadgeActive,
     checkForUpdates,
+    isImporting,
   } = useFlightStore();
   const [showSettings, setShowSettings] = useState(false);
   const [activeView, setActiveView] = useState<'flights' | 'overview'>('overview');
@@ -227,7 +228,9 @@ export function Dashboard() {
               onClick={() => setIsImporterCollapsed((v) => !v)}
               className="flex items-center gap-2 text-xs text-gray-400 hover:text-white transition-colors"
             >
-              <span className="font-medium">{isImporterCollapsed !== false ? 'Import — click to expand' : 'Import'}</span>
+              <span className={`font-medium ${isImporting ? 'text-emerald-400' : ''}`}>
+                {isImporting ? 'Importing...' : isImporterCollapsed !== false ? 'Import — click to expand' : 'Import'}
+              </span>
               <span
                 className={`w-5 h-5 rounded-full border border-gray-600 flex items-center justify-center transition-transform duration-200 ${
                   isImporterCollapsed !== false ? 'rotate-180' : ''
