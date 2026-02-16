@@ -22,6 +22,7 @@ tauri-plugin-dialog = { version = "2", optional = true }
 tauri-plugin-fs = { version = "2", optional = true }
 tauri-plugin-http = { version = "2", optional = true }
 tauri-plugin-log = { version = "2", optional = true }
+tauri-plugin-window-state = { version = "2", optional = true }
 
 # Web server (optional — only for Docker/web builds)
 axum = { version = "0.7", features = ["multipart"], optional = true }
@@ -78,6 +79,7 @@ tauri-app = [
     "dep:tauri-plugin-fs",
     "dep:tauri-plugin-http",
     "dep:tauri-plugin-log",
+    "dep:tauri-plugin-window-state",
     "custom-protocol",
 ]
 web = ["dep:axum", "dep:tower-http"]

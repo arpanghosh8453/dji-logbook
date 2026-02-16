@@ -15,7 +15,9 @@
 
 <p align="center">A high-performance application for analyzing drone flight logs (DJI and Litchi CSV formats). Available as a Tauri v2 desktop app or a Docker-deployable web app. Built with DuckDB and React.</p>
 
-
+<p align="center">
+    <img src="screenshots/Comparison.png" alt="Comparison chart" width="900" />
+</p>
 <p align="center">
     <img src="screenshots/interface_dark.png" alt="Interface (dark)" width="900" />
 </p>

@@ -13,7 +13,7 @@
 
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { isWebMode, pickFiles, computeFileHash, getFlights } from '@/lib/api';
+import { isWebMode, pickFiles, computeFileHash, getFlights, getSyncConfig, triggerSync } from '@/lib/api';
 import { useFlightStore } from '@/stores/flightStore';
 
 // Storage keys for sync folder, blacklist, and autoscan
@@ -439,8 +439,63 @@ export function FlightImporter() {
 
   // Background automatic sync on startup (lazy loaded, non-blocking)
   useEffect(() => {
-    // Only run once, only in desktop mode, only if sync folder is configured, only if autoscan enabled
-    if (backgroundSyncTriggeredRef.current || isWebMode() || !autoscanEnabled) return;
+    // Only run once
+    if (backgroundSyncTriggeredRef.current) return;
+    
+    // Web mode: check if SYNC_LOGS_PATH is configured on server
+    if (isWebMode()) {
+      backgroundSyncTriggeredRef.current = true;
+      backgroundSyncAbortRef.current = false;
+      
+      // Lazy load: wait 3 seconds after mount to not block initial render
+      const timeoutId = setTimeout(async () => {
+        if (isImporting || isBatchProcessing || isSyncing) return;
+        
+        setIsBackgroundSyncing(true);
+        setBackgroundSyncResult(null);
+        
+        try {
+          // Check if sync is configured on server
+          if (backgroundSyncAbortRef.current) {
+            setIsBackgroundSyncing(false);
+            return;
+          }
+          
+          const config = await getSyncConfig();
+          if (!config.syncPath) {
+            // No sync folder configured on server
+            setIsBackgroundSyncing(false);
+            return;
+          }
+          
+          if (backgroundSyncAbortRef.current) {
+            setIsBackgroundSyncing(false);
+            return;
+          }
+          
+          // Trigger sync from server
+          const result = await triggerSync();
+          
+          setIsBackgroundSyncing(false);
+          
+          if (result.processed > 0) {
+            setBackgroundSyncResult(`Synced ${result.processed} new file${result.processed === 1 ? '' : 's'}`);
+            // Refresh flight list
+            const { loadFlights, loadAllTags } = useFlightStore.getState();
+            await loadFlights();
+            loadAllTags();
+          }
+        } catch (e) {
+          console.error('Background sync check failed:', e);
+          setIsBackgroundSyncing(false);
+        }
+      }, 3000); // 3 second delay for lazy loading
+      
+      return () => clearTimeout(timeoutId);
+    }
+    
+    // Desktop mode: only if sync folder is configured and autoscan enabled
+    if (!autoscanEnabled) return;
     
     const folderPath = getSyncFolderPath();
     if (!folderPath) return;
@@ -548,16 +603,62 @@ export function FlightImporter() {
 
   const isDragActive = webDragActive || tauriDragActive;
 
+  // State for web mode sync configuration
+  const [webSyncPath, setWebSyncPath] = useState<string | null>(null);
+
+  // Check if web sync is configured on mount
+  useEffect(() => {
+    if (!isWebMode()) return;
+    
+    getSyncConfig().then(config => {
+      setWebSyncPath(config.syncPath);
+    }).catch(() => {
+      // Silently ignore
+    });
+  }, []);
+
   // Handle sync button click
   const handleSync = async () => {
-    if (isWebMode()) {
-      alert('Sync feature is only available in the desktop app.');
-      return;
-    }
-
     // Cancel background sync - user action takes priority
     cancelBackgroundSync();
 
+    // Web mode: use server-side sync
+    if (isWebMode()) {
+      setIsSyncing(true);
+      setBatchMessage(null);
+      
+      try {
+        const result = await triggerSync();
+        setIsSyncing(false);
+        
+        if (!result.syncPath) {
+          setBatchMessage('NO_SYNC_FOLDER_WEB');
+          return;
+        }
+        
+        if (result.processed > 0 || result.skipped > 0 || result.errors > 0) {
+          const parts: string[] = [];
+          if (result.processed > 0) parts.push(`${result.processed} imported`);
+          if (result.skipped > 0) parts.push(`${result.skipped} skipped`);
+          if (result.errors > 0) parts.push(`${result.errors} errors`);
+          setBatchMessage(`Sync complete: ${parts.join(', ')}`);
+          
+          // Refresh flight list
+          const { loadFlights, loadAllTags } = useFlightStore.getState();
+          await loadFlights();
+          loadAllTags();
+        } else {
+          setBatchMessage(result.message);
+        }
+      } catch (e) {
+        console.error('Sync failed:', e);
+        setBatchMessage(`Sync failed: ${e}`);
+        setIsSyncing(false);
+      }
+      return;
+    }
+
+    // Desktop mode: use local sync folder
     const folderPath = getSyncFolderPath();
     if (!folderPath) {
       setBatchMessage('NO_SYNC_FOLDER');
@@ -663,12 +764,15 @@ export function FlightImporter() {
             >
               Browse
             </button>
-            {!isWebMode() && (
+            {/* Show Sync button in desktop mode (always) or web mode (when SYNC_LOGS_PATH is configured) */}
+            {(!isWebMode() || webSyncPath) && (
               <button
                 onClick={handleSync}
                 className="btn-primary text-sm py-1.5 px-3 force-white flex-1 max-w-[100px]"
                 disabled={isImporting || isBatchProcessing || isSyncing}
-                title={syncFolderPath ? `Sync from: ${getSyncFolderDisplayName()}` : 'Configure sync folder first'}
+                title={isWebMode() 
+                  ? (webSyncPath ? `Sync from server: ${webSyncPath}` : 'Sync not configured on server')
+                  : (syncFolderPath ? `Sync from: ${getSyncFolderDisplayName()}` : 'Configure sync folder first')}
               >
                 <div className="flex items-center justify-center gap-1">
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -728,6 +832,18 @@ export function FlightImporter() {
                 </div>
                 <p className="mt-1 text-[10px] text-amber-300">
                   Click the folder icon in the header above to select a folder for automatic syncing.
+                </p>
+              </div>
+            ) : batchMessage === 'NO_SYNC_FOLDER_WEB' ? (
+              <div className="mt-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                <div className="flex items-center gap-2 text-amber-400">
+                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                  </svg>
+                  <span className="text-xs font-medium">Sync not configured on server</span>
+                </div>
+                <p className="mt-1 text-[10px] text-amber-300">
+                  Set SYNC_LOGS_PATH environment variable and mount the volume in docker-compose.yml to enable sync.
                 </p>
               </div>
             ) : (

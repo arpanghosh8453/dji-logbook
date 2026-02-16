@@ -6,6 +6,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -131,6 +132,8 @@ export function FlightList({
     setOverviewHighlightedFlightId,
   } =
     useFlightStore();
+  const heatmapDateFilter = useFlightStore((s) => s.heatmapDateFilter);
+  const setHeatmapDateFilter = useFlightStore((s) => s.setHeatmapDateFilter);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
@@ -221,6 +224,28 @@ export function FlightList({
       };
     }
   }, [isExporting, isDeleting]);
+
+  // Sync filtered flight IDs to the store so Overview can use them
+  // Only sync after flights have loaded to avoid setting an empty Set prematurely
+  const setSidebarFilteredFlightIds = useFlightStore((s) => s.setSidebarFilteredFlightIds);
+  
+  // Apply heatmap date filter when set from Overview (double-click on heatmap day)
+  // This effect must run BEFORE the general sync effect to avoid race conditions
+  useEffect(() => {
+    if (heatmapDateFilter) {
+      // Set date range to the single selected day (from and to are the same day)
+      // Use separate Date objects to avoid mutation issues
+      const fromDate = new Date(heatmapDateFilter);
+      fromDate.setHours(0, 0, 0, 0);
+      const toDate = new Date(heatmapDateFilter);
+      toDate.setHours(0, 0, 0, 0);
+      setDateRange({ from: fromDate, to: toDate });
+      // Expand filters section if collapsed so user can see the applied filter
+      setIsFiltersCollapsed(false);
+      // Clear the heatmap filter after applying (one-time action)
+      setHeatmapDateFilter(null);
+    }
+  }, [heatmapDateFilter, setHeatmapDateFilter]);
 
   const dateRangeLabel = useMemo(() => {
     if (!dateRange?.from && !dateRange?.to) return 'Any date';
@@ -465,10 +490,14 @@ export function FlightList({
   }, [dateRange, flights, selectedBatteries, selectedDrones, durationFilterMin, durationFilterMax, altitudeFilterMin, altitudeFilterMax, distanceFilterMin, distanceFilterMax, selectedTags, isFilterInverted, mapAreaFilterEnabled, mapVisibleBounds]);
 
   // Sync filtered flight IDs to the store so Overview can use them
-  const setSidebarFilteredFlightIds = useFlightStore((s) => s.setSidebarFilteredFlightIds);
-  useEffect(() => {
+  // Use useLayoutEffect to ensure sync happens synchronously before browser paint
+  // This prevents Overview from seeing stale/intermediate filter states
+  useLayoutEffect(() => {
+    // Don't sync if flights haven't loaded yet - this prevents setting an empty Set
+    // which would cause Overview to show "no flights" incorrectly
+    if (flights.length === 0) return;
     setSidebarFilteredFlightIds(new Set(filteredFlights.map((f) => f.id)));
-  }, [filteredFlights, setSidebarFilteredFlightIds]);
+  }, [flights.length, filteredFlights, setSidebarFilteredFlightIds]);
 
   // Clear selection if the currently selected flight is not in the filtered results
   useEffect(() => {

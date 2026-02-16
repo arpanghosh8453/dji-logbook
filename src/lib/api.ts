@@ -360,6 +360,40 @@ export function isWebMode(): boolean {
 }
 
 // ============================================================================
+// Sync from folder (Web/Docker mode only)
+// ============================================================================
+
+export interface SyncConfig {
+  processed: number;
+  skipped: number;
+  errors: number;
+  message: string;
+  syncPath: string | null;
+}
+
+/**
+ * Get the sync folder configuration (web mode only).
+ * Returns the configured SYNC_LOGS_PATH if set on the server.
+ */
+export async function getSyncConfig(): Promise<SyncConfig> {
+  if (!isWeb) {
+    return { processed: 0, skipped: 0, errors: 0, message: 'Not in web mode', syncPath: null };
+  }
+  return fetchJson<SyncConfig>('/sync/config');
+}
+
+/**
+ * Trigger sync from the server's SYNC_LOGS_PATH folder (web mode only).
+ * This imports any new log files from the mounted sync folder.
+ */
+export async function triggerSync(): Promise<SyncConfig> {
+  if (!isWeb) {
+    return { processed: 0, skipped: 0, errors: 0, message: 'Not in web mode', syncPath: null };
+  }
+  return fetchJson<SyncConfig>('/sync', { method: 'POST' });
+}
+
+// ============================================================================
 // Database backup & restore
 // ============================================================================
 

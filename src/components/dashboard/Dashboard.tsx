@@ -45,6 +45,11 @@ export function Dashboard() {
   // Start with null, determine collapsed state after flights are loaded from DB
   const [isImporterCollapsed, setIsImporterCollapsed] = useState<boolean | null>(null);
   const [mainSplit, setMainSplit] = useState(50);
+  // Track if telemetry panel is collapsed (slider pulled past minimum width)
+  const [isTelemetryCollapsed, setIsTelemetryCollapsed] = useState(false);
+  // Width of telemetry panel when collapsed (minimum visible width)
+  const TELEMETRY_MIN_VISIBLE_WIDTH = 40;
+  const TELEMETRY_MIN_NORMAL_WIDTH = 720;
   const resizingRef = useRef<null | 'sidebar' | 'main'>(null);
 
   // On initial load, collapse importer if there are flights, expand if empty
@@ -78,8 +83,19 @@ export function Dashboard() {
         if (!container) return;
         const rect = container.getBoundingClientRect();
         const percentage = ((event.clientX - rect.left) / rect.width) * 100;
-        const minLeftPercent = (720 / rect.width) * 100;
+        const minLeftPercent = (TELEMETRY_MIN_VISIBLE_WIDTH / rect.width) * 100;
         const maxLeftPercent = 100 - (320 / rect.width) * 100;
+        
+        // Calculate the actual pixel width the telemetry panel would be
+        const telemetryPixelWidth = (percentage / 100) * rect.width;
+        
+        // If dragging below normal minimum, collapse the telemetry panel
+        if (telemetryPixelWidth < TELEMETRY_MIN_NORMAL_WIDTH) {
+          setIsTelemetryCollapsed(true);
+        } else {
+          setIsTelemetryCollapsed(false);
+        }
+        
         setMainSplit(
           Math.min(Math.max(percentage, minLeftPercent), maxLeftPercent)
         );
@@ -410,22 +426,38 @@ export function Dashboard() {
 
             {/* Charts and Map Grid */}
             <div id="main-panels" className="flex-1 min-h-0 flex gap-4 p-4 overflow-hidden">
-              {/* Telemetry Charts */}
+              {/* Telemetry Charts - when collapsed, content clips instead of squeezing */}
               <div
-                className="card overflow-hidden flex flex-col min-h-0"
-                style={{ flexBasis: `${mainSplit}%`, minWidth: 720 }}
+                className={`card flex flex-col min-h-0 relative ${isTelemetryCollapsed ? 'overflow-hidden' : 'overflow-hidden'}`}
+                style={{ 
+                  flexBasis: `${mainSplit}%`, 
+                  minWidth: isTelemetryCollapsed ? TELEMETRY_MIN_VISIBLE_WIDTH : TELEMETRY_MIN_NORMAL_WIDTH,
+                  flexShrink: 0,
+                }}
               >
-                <div className="p-3 border-b border-gray-700">
-                  <h2 className="font-semibold text-white">
-                    Telemetry Data
-                  </h2>
-                </div>
-                <div className="flex-1 p-2 overflow-auto">
-                  <TelemetryCharts
-                    data={currentFlightData!.telemetry}
-                    unitSystem={unitSystem}
-                    startTime={currentFlightData!.flight.startTime}
-                  />
+                {/* Inner container that maintains minimum width for content */}
+                <div 
+                  className="flex flex-col h-full"
+                  style={{ 
+                    minWidth: TELEMETRY_MIN_NORMAL_WIDTH,
+                    width: isTelemetryCollapsed ? TELEMETRY_MIN_NORMAL_WIDTH : '100%',
+                  }}
+                >
+                  <div className="p-3 border-b border-gray-700 flex items-center justify-between">
+                    <h2 className="font-semibold text-white">
+                      Telemetry Data
+                    </h2>
+                    {isTelemetryCollapsed && (
+                      <span className="text-xs text-gray-500 ml-2">Drag right to expand</span>
+                    )}
+                  </div>
+                  <div className="flex-1 p-2 overflow-auto">
+                    <TelemetryCharts
+                      data={currentFlightData!.telemetry}
+                      unitSystem={unitSystem}
+                      startTime={currentFlightData!.flight.startTime}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -433,7 +465,8 @@ export function Dashboard() {
                 onMouseDown={() => {
                   resizingRef.current = 'main';
                 }}
-                className="w-1 cursor-col-resize bg-gray-700/60 rounded"
+                className="w-1 cursor-col-resize bg-gray-700/60 rounded hover:bg-drone-primary/60 transition-colors"
+                title="Drag to resize. Pull left to collapse telemetry panel."
               />
 
               {/* Flight Map */}

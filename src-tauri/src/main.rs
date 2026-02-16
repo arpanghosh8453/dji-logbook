@@ -178,12 +178,12 @@ mod tauri_app {
 
         let parse_result = match parser.parse_log(&path).await {
             Ok(result) => result,
-            Err(crate::parser::ParserError::AlreadyImported) => {
-                log::info!("Skipping already-imported file: {}", file_path);
+            Err(crate::parser::ParserError::AlreadyImported(matching_flight)) => {
+                log::info!("Skipping already-imported file: {} — matches flight '{}' in database", file_path, matching_flight);
                 return Ok(ImportResult {
                     success: false,
                     flight_id: None,
-                    message: "This flight log has already been imported".to_string(),
+                    message: format!("This flight log has already been imported (matches: {})", matching_flight),
                     point_count: 0,
                     file_hash: None,
                 });
@@ -201,16 +201,16 @@ mod tauri_app {
         };
 
         // Check for duplicate flight based on signature (drone_serial + battery_serial + start_time)
-        if state.db.is_duplicate_flight(
+        if let Some(matching_flight) = state.db.is_duplicate_flight(
             parse_result.metadata.drone_serial.as_deref(),
             parse_result.metadata.battery_serial.as_deref(),
             parse_result.metadata.start_time,
-        ).unwrap_or(false) {
-            log::info!("Skipping duplicate flight (signature match): {}", file_path);
+        ).unwrap_or(None) {
+            log::info!("Skipping duplicate flight (signature match): {} — matches flight '{}' in database", file_path, matching_flight);
             return Ok(ImportResult {
                 success: false,
                 flight_id: None,
-                message: "Duplicate flight — a flight with the same drone, battery, and start time already exists".to_string(),
+                message: format!("Duplicate flight — matches '{}' (same drone, battery, and start time)", matching_flight),
                 point_count: 0,
                 file_hash: parse_result.metadata.file_hash.clone(),
             });
@@ -686,6 +686,7 @@ mod tauri_app {
             .plugin(tauri_plugin_dialog::init())
             .plugin(tauri_plugin_fs::init())
             .plugin(tauri_plugin_http::init())
+            .plugin(tauri_plugin_window_state::Builder::new().build())
             .setup(|app| {
                 let db = init_database(app.handle())?;
                 app.manage(AppState { db: Arc::new(db) });

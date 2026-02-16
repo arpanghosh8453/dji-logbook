@@ -5,9 +5,13 @@ services:
       - "8080:80"
     volumes:
       - drone-data:/data/drone-logbook
+    # Uncomment and set your sync folder path to enable automatic log import
+    # - /path/to/your/drone/logs/on/host/device:/sync-logs:ro
     environment:
       - DATA_DIR=/data/drone-logbook
       - RUST_LOG=info
+    # Uncomment to enable automatic sync from mounted folder on browser load
+    # - SYNC_LOGS_PATH=/sync-logs  
     restart: unless-stopped
 
 volumes:

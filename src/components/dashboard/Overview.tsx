@@ -49,6 +49,7 @@ export function Overview({ stats, flights, unitSystem, onSelectFlight }: Overvie
   const sidebarFilteredFlightIds = useFlightStore((state) => state.sidebarFilteredFlightIds);
   const getDisplaySerial = useFlightStore((state) => state.getDisplaySerial);
   const overviewHighlightedFlightId = useFlightStore((state) => state.overviewHighlightedFlightId);
+  const setHeatmapDateFilter = useFlightStore((state) => state.setHeatmapDateFilter);
   const resolvedTheme = useMemo(() => resolveThemeMode(themeMode), [themeMode]);
 
   // Use sidebar-filtered flights (fall back to all flights if no filter set yet)
@@ -238,6 +239,7 @@ export function Overview({ stats, flights, unitSystem, onSelectFlight }: Overvie
         <ActivityHeatmapCard
           flightsByDate={filteredStats.flightsByDate}
           isLight={resolvedTheme === 'light'}
+          onDateDoubleClick={setHeatmapDateFilter}
         />
 
         {/* Drone Flight Time */}
@@ -430,9 +432,11 @@ function StatCard({
 function ActivityHeatmapCard({
   flightsByDate,
   isLight,
+  onDateDoubleClick,
 }: {
   flightsByDate: { date: string; count: number }[];
   isLight: boolean;
+  onDateDoubleClick?: (date: Date) => void;
 }) {
   const today = new Date();
   const oneYearAgo = new Date(today);
@@ -580,6 +584,7 @@ function ActivityHeatmapCard({
           flightsByDate={filteredByDate}
           isLight={isLight}
           dateRange={dateRange}
+          onDateDoubleClick={onDateDoubleClick}
         />
       </div>
     </div>
@@ -590,10 +595,12 @@ function ActivityHeatmap({
   flightsByDate,
   isLight,
   dateRange,
+  onDateDoubleClick,
 }: {
   flightsByDate: { date: string; count: number }[];
   isLight: boolean;
   dateRange?: DateRange;
+  onDateDoubleClick?: (date: Date) => void;
 }) {
   const maxWidth = 1170;
   const labelWidth = 28;
@@ -736,7 +743,7 @@ function ActivityHeatmap({
                 week.map((day, dayIdx) => (
                   <div
                     key={`${weekIdx}-${dayIdx}`}
-                    className="rounded-[2px] transition-colors"
+                    className={`rounded-[2px] transition-colors ${day.count >= 0 ? 'cursor-pointer hover:ring-1 hover:ring-drone-primary' : ''}`}
                     style={{
                       width: cellSize,
                       height: cellSize,
@@ -746,9 +753,14 @@ function ActivityHeatmap({
                     }}
                     title={
                       day.count >= 0
-                        ? `${day.date.toLocaleDateString()}: ${day.count} flight${day.count !== 1 ? 's' : ''}`
+                        ? `${day.date.toLocaleDateString()}: ${day.count} flight${day.count !== 1 ? 's' : ''} (double-click to filter)`
                         : ''
                     }
+                    onDoubleClick={() => {
+                      if (day.count >= 0 && onDateDoubleClick) {
+                        onDateDoubleClick(day.date);
+                      }
+                    }}
                   />
                 ))
               )}

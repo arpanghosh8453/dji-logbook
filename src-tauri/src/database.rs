@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use duckdb::{params, Connection, Result as DuckResult};
+use duckdb::{params, Connection, OptionalExt, Result as DuckResult};
 use thiserror::Error;
 
 use crate::models::{BatteryHealthPoint, BatteryUsage, DroneUsage, Flight, FlightDateCount, FlightMetadata, FlightTag, OverviewStats, TelemetryPoint, TelemetryRecord, TopDistanceFlight, TopFlight};
@@ -1332,49 +1332,51 @@ impl Database {
     }
 
     /// Check if a file has already been imported (by hash)
-    pub fn is_file_imported(&self, file_hash: &str) -> Result<bool, DatabaseError> {
+    /// Returns the display_name of the matching flight if found, None otherwise
+    pub fn is_file_imported(&self, file_hash: &str) -> Result<Option<String>, DatabaseError> {
         let conn = self.conn.lock().unwrap();
 
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM flights WHERE file_hash = ?",
+        let result: Option<String> = conn.query_row(
+            "SELECT COALESCE(display_name, file_name) FROM flights WHERE file_hash = ? LIMIT 1",
             params![file_hash],
             |row| row.get(0),
-        )?;
+        ).optional()?;
 
-        Ok(count > 0)
+        Ok(result)
     }
 
     /// Check if a duplicate flight exists based on signature (drone_serial + battery_serial + start_time).
-    /// Returns true if a flight with the same drone, battery, and start time (within 60 seconds) exists.
-    /// If any of the signature fields are None, returns false (can't reliably deduplicate).
+    /// Returns the display_name of the matching flight if found, None otherwise.
+    /// If any of the signature fields are None, returns None (can't reliably deduplicate).
     pub fn is_duplicate_flight(
         &self,
         drone_serial: Option<&str>,
         battery_serial: Option<&str>,
         start_time: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<bool, DatabaseError> {
+    ) -> Result<Option<String>, DatabaseError> {
         // If any key field is missing, we can't reliably check for duplicates
         let (drone, battery, time) = match (drone_serial, battery_serial, start_time) {
             (Some(d), Some(b), Some(t)) if !d.is_empty() && !b.is_empty() => (d, b, t),
-            _ => return Ok(false),
+            _ => return Ok(None),
         };
 
         let conn = self.conn.lock().unwrap();
 
-        // Check for existing flight within 60-second window
-        let count: i64 = conn.query_row(
+        // Check for existing flight within 60-second window and return its display name
+        let result: Option<String> = conn.query_row(
             r#"
-            SELECT COUNT(*) FROM flights 
+            SELECT COALESCE(display_name, file_name) FROM flights 
             WHERE drone_serial = ?
               AND battery_serial = ?
               AND start_time IS NOT NULL
               AND ABS(EPOCH(start_time) - EPOCH(?::TIMESTAMPTZ)) < 60
+            LIMIT 1
             "#,
             params![drone, battery, time.to_rfc3339()],
             |row| row.get(0),
-        )?;
+        ).optional()?;
 
-        Ok(count > 0)
+        Ok(result)
     }
 
     /// Remove duplicate flights from the database based on signature (drone_serial + battery_serial + start_time).

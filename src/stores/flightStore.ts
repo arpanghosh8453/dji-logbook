@@ -67,6 +67,10 @@ interface FlightState {
   sidebarFilteredFlightIds: Set<number> | null;
   setSidebarFilteredFlightIds: (ids: Set<number> | null) => void;
 
+  // Heatmap date filter (set from Overview heatmap double-click, consumed by FlightList)
+  heatmapDateFilter: Date | null;
+  setHeatmapDateFilter: (date: Date | null) => void;
+
   // Overview map area filter
   mapAreaFilterEnabled: boolean;
   mapVisibleBounds: { west: number; south: number; east: number; north: number } | null;
@@ -532,12 +536,16 @@ export const useFlightStore = create<FlightState>((set, get) => ({
 
     try {
       const removed = await api.removeAllAutoTags();
+      // Clear the flight data cache so tags are refreshed from the server
+      set({ _flightDataCache: new Map() });
       // Reload flights to get updated tags
       await get().loadFlights();
       await get().loadAllTags();
       // Also reload current flight data if one is selected to refresh displayed tags
       const selectedId = get().selectedFlightId;
       if (selectedId) {
+        // Clear current selection first to force a fresh load
+        set({ currentFlightData: null });
         await get().selectFlight(selectedId);
       }
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
@@ -635,6 +643,10 @@ export const useFlightStore = create<FlightState>((set, get) => ({
   sidebarFilteredFlightIds: null,
   setSidebarFilteredFlightIds: (ids) => set({ sidebarFilteredFlightIds: ids }),
 
+  // Heatmap date filter (set from Overview heatmap double-click)
+  heatmapDateFilter: null,
+  setHeatmapDateFilter: (date) => set({ heatmapDateFilter: date }),
+
   // Overview map area filter
   mapAreaFilterEnabled: false,
   mapVisibleBounds: null,
@@ -680,7 +692,7 @@ export const useFlightStore = create<FlightState>((set, get) => ({
     set({
       selectedFlightId: null,
       currentFlightData: null,
-      overviewStats: null,
+      // Note: Don't clear overviewStats here - it should persist until explicitly reloaded
     }),
 
   // Clear error

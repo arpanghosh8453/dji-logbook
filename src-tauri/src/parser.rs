@@ -37,8 +37,8 @@ pub enum ParserError {
     #[error("Parse error: {0}")]
     Parse(String),
 
-    #[error("File already imported")]
-    AlreadyImported,
+    #[error("File already imported (matches: {0})")]
+    AlreadyImported(String),
 
     #[error("No valid telemetry data found")]
     NoTelemetryData,
@@ -112,13 +112,13 @@ impl<'a> LogParser<'a> {
         let file_hash = Self::calculate_file_hash(file_path)?;
         log::debug!("File hash: {}", file_hash);
 
-        if self
+        if let Some(matching_flight) = self
             .db
             .is_file_imported(&file_hash)
             .map_err(|e| ParserError::Parse(e.to_string()))?
         {
-            log::info!("File already imported (hash match), skipping");
-            return Err(ParserError::AlreadyImported);
+            log::info!("File already imported (hash match), skipping — matches flight: {}", matching_flight);
+            return Err(ParserError::AlreadyImported(matching_flight));
         }
 
         // Detect file format and route to appropriate parser

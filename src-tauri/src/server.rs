@@ -82,13 +82,13 @@ async fn import_log(
 
     let parse_result = match parser.parse_log(&temp_path).await {
         Ok(result) => result,
-        Err(crate::parser::ParserError::AlreadyImported) => {
+        Err(crate::parser::ParserError::AlreadyImported(matching_flight)) => {
             // Clean up temp file
             let _ = std::fs::remove_file(&temp_path);
             return Ok(Json(ImportResult {
                 success: false,
                 flight_id: None,
-                message: "This flight log has already been imported".to_string(),
+                message: format!("This flight log has already been imported (matches: {})", matching_flight),
                 point_count: 0,
                 file_hash: None,
             }));
@@ -110,16 +110,16 @@ async fn import_log(
     let _ = std::fs::remove_file(&temp_path);
 
     // Check for duplicate flight based on signature (drone_serial + battery_serial + start_time)
-    if state.db.is_duplicate_flight(
+    if let Some(matching_flight) = state.db.is_duplicate_flight(
         parse_result.metadata.drone_serial.as_deref(),
         parse_result.metadata.battery_serial.as_deref(),
         parse_result.metadata.start_time,
-    ).unwrap_or(false) {
-        log::info!("Skipping duplicate flight (signature match): {}", file_name);
+    ).unwrap_or(None) {
+        log::info!("Skipping duplicate flight (signature match): {} — matches flight '{}' in database", file_name, matching_flight);
         return Ok(Json(ImportResult {
             success: false,
             flight_id: None,
-            message: "Duplicate flight — a flight with the same drone, battery, and start time already exists".to_string(),
+            message: format!("Duplicate flight — matches '{}' (same drone, battery, and start time)", matching_flight),
             point_count: 0,
             file_hash: parse_result.metadata.file_hash.clone(),
         }));
@@ -666,6 +666,188 @@ async fn regenerate_smart_tags(
 }
 
 // ============================================================================
+// SYNC FROM FOLDER (for Docker/web deployment)
+// ============================================================================
+
+/// Response for sync operation
+#[derive(Serialize)]
+struct SyncResponse {
+    processed: usize,
+    skipped: usize,
+    errors: usize,
+    message: String,
+    sync_path: Option<String>,
+}
+
+/// GET /api/sync/config — Get the sync folder path configuration
+async fn get_sync_config() -> Json<SyncResponse> {
+    let sync_path = std::env::var("SYNC_LOGS_PATH").ok();
+    Json(SyncResponse {
+        processed: 0,
+        skipped: 0,
+        errors: 0,
+        message: if sync_path.is_some() { "Sync folder configured".to_string() } else { "No sync folder configured".to_string() },
+        sync_path,
+    })
+}
+
+/// POST /api/sync — Trigger sync from SYNC_LOGS_PATH folder
+async fn sync_from_folder(
+    AxumState(state): AxumState<WebAppState>,
+) -> Result<Json<SyncResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let sync_path = match std::env::var("SYNC_LOGS_PATH") {
+        Ok(path) => path,
+        Err(_) => {
+            return Ok(Json(SyncResponse {
+                processed: 0,
+                skipped: 0,
+                errors: 0,
+                message: "SYNC_LOGS_PATH environment variable not configured".to_string(),
+                sync_path: None,
+            }));
+        }
+    };
+
+    let sync_dir = std::path::PathBuf::from(&sync_path);
+    if !sync_dir.exists() {
+        return Ok(Json(SyncResponse {
+            processed: 0,
+            skipped: 0,
+            errors: 0,
+            message: format!("Sync folder does not exist: {}", sync_path),
+            sync_path: Some(sync_path),
+        }));
+    }
+
+    log::info!("Starting sync from folder: {}", sync_path);
+    let start = std::time::Instant::now();
+
+    // Read all log files from the sync folder
+    let entries = match std::fs::read_dir(&sync_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            return Err(err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read sync folder: {}", e),
+            ));
+        }
+    };
+
+    let log_files: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_file() {
+                    let name = entry.file_name().to_string_lossy().to_lowercase();
+                    return name.ends_with(".txt") || name.ends_with(".csv");
+                }
+            }
+            false
+        })
+        .map(|entry| entry.path())
+        .collect();
+
+    if log_files.is_empty() {
+        return Ok(Json(SyncResponse {
+            processed: 0,
+            skipped: 0,
+            errors: 0,
+            message: "No log files found in sync folder".to_string(),
+            sync_path: Some(sync_path),
+        }));
+    }
+
+    let parser = LogParser::new(&state.db);
+    let mut processed = 0usize;
+    let mut skipped = 0usize;
+    let mut errors = 0usize;
+
+    // Check smart tags setting
+    let config_path = state.db.data_dir.join("config.json");
+    let tags_enabled = if config_path.exists() {
+        std::fs::read_to_string(&config_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .and_then(|v| v.get("smart_tags_enabled").and_then(|v| v.as_bool()))
+            .unwrap_or(true)
+    } else {
+        true
+    };
+
+    for file_path in log_files {
+        let file_name = file_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        
+        let parse_result = match parser.parse_log(&file_path).await {
+            Ok(result) => result,
+            Err(crate::parser::ParserError::AlreadyImported(matching_flight)) => {
+                log::debug!("Skipping already-imported file: {} — matches flight '{}'", file_name, matching_flight);
+                skipped += 1;
+                continue;
+            }
+            Err(e) => {
+                log::warn!("Failed to parse {}: {}", file_name, e);
+                errors += 1;
+                continue;
+            }
+        };
+
+        // Check for duplicate flight
+        if let Some(matching_flight) = state.db.is_duplicate_flight(
+            parse_result.metadata.drone_serial.as_deref(),
+            parse_result.metadata.battery_serial.as_deref(),
+            parse_result.metadata.start_time,
+        ).unwrap_or(None) {
+            log::debug!("Skipping duplicate flight: {} — matches flight '{}'", file_name, matching_flight);
+            skipped += 1;
+            continue;
+        }
+
+        // Insert flight
+        let flight_id = match state.db.insert_flight(&parse_result.metadata) {
+            Ok(id) => id,
+            Err(e) => {
+                log::warn!("Failed to insert flight from {}: {}", file_name, e);
+                errors += 1;
+                continue;
+            }
+        };
+
+        // Insert telemetry
+        if let Err(e) = state.db.bulk_insert_telemetry(flight_id, &parse_result.points) {
+            log::warn!("Failed to insert telemetry for {}: {}", file_name, e);
+            let _ = state.db.delete_flight(flight_id);
+            errors += 1;
+            continue;
+        }
+
+        // Insert smart tags if enabled
+        if tags_enabled {
+            if let Err(e) = state.db.insert_flight_tags(flight_id, &parse_result.tags) {
+                log::warn!("Failed to insert tags for {}: {}", file_name, e);
+            }
+        }
+
+        processed += 1;
+        log::debug!("Synced: {}", file_name);
+    }
+
+    let elapsed = start.elapsed().as_secs_f64();
+    let msg = format!(
+        "Sync complete: {} imported, {} skipped, {} errors in {:.1}s",
+        processed, skipped, errors, elapsed
+    );
+    log::info!("{}", msg);
+
+    Ok(Json(SyncResponse {
+        processed,
+        skipped,
+        errors,
+        message: msg,
+        sync_path: Some(sync_path),
+    }))
+}
+
+// ============================================================================
 // SERVER SETUP
 // ============================================================================
 
@@ -701,6 +883,8 @@ pub fn build_router(state: WebAppState) -> Router {
         .route("/api/app_log_dir", get(get_app_log_dir))
         .route("/api/backup", get(export_backup))
         .route("/api/backup/restore", post(import_backup))
+        .route("/api/sync/config", get(get_sync_config))
+        .route("/api/sync", post(sync_from_folder))
         .layer(cors)
         .layer(DefaultBodyLimit::max(250 * 1024 * 1024)) // 250 MB
         .with_state(state)
