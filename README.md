@@ -62,6 +62,26 @@
     <img src="screenshots/flight_map_2.png" alt="Flight map 2" width="900" />
 </p>
 
+## Contents
+
+- [Features](#features)
+- [Accessing flight log files](#accessing-flight-log-files)
+  - [DJI Flight Logs](#dji-flight-logs)
+  - [Litchi CSV Exports](#litchi-csv-exports)
+- [Migrating from Airdata?](#migrating-from-airdata)
+- [Setup and installation (Windows/MacOS)](#setup-and-installation-windowsmacos)
+  - [Try the Webapp First](#try-the-webapp-first-no-installation-required)
+  - [macOS Users: "Damaged File" Error Fix](#macos-users-damaged-file-error-fix)
+- [Usage](#usage)
+- [Building from source (Linux users)](#building-from-source-linux-users)
+- [Docker deployment (Self-hosted Web)](#docker-deployment-self-hosted-web)
+- [Configuration](#configuration)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [How to obtain your own DJI Developer API key](#how-to-obtain-your-own-dji-developer-api-key)
+- [Love this project?](#love-this-project)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
 
 ## Features
 
