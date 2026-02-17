@@ -309,7 +309,7 @@ ${points}
       <name>${escapeXml(name)}</name>
       <LineString>
         <tessellate>1</tessellate>
-        <altitudeMode>absolute</altitudeMode>
+        <altitudeMode>relativeToGround</altitudeMode>
         <coordinates>${coordinates}</coordinates>
       </LineString>
     </Placemark>

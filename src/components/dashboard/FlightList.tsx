@@ -915,6 +915,8 @@ ${points}
     <Placemark>
       <name>Flight Path</name>
       <LineString>
+        <tessellate>1</tessellate>
+        <altitudeMode>relativeToGround</altitudeMode>
         <coordinates>${coordinates}</coordinates>
       </LineString>
     </Placemark>
