@@ -23,6 +23,7 @@
     "deck.gl": "^9.1.0",
     "echarts": "^5.5.0",
     "echarts-for-react": "^3.0.2",
+    "js-sha256": "^0.11.1",
     "jszip": "^3.10.1",
     "maplibre-gl": "^4.7.0",
     "react": "^18.3.1",

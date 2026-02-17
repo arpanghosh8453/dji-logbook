@@ -3,6 +3,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { sha256 as jsSha256 } from 'js-sha256';
 import * as api from '@/lib/api';
 import { useFlightStore } from '@/stores/flightStore';
 import { Select } from '@/components/ui/Select';
@@ -72,11 +73,17 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       return;
     }
     try {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(trimmed);
-      const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      let hashHex: string;
+      // Use Web Crypto API in secure contexts, fallback to js-sha256 for HTTP
+      if (typeof crypto !== 'undefined' && crypto.subtle) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(trimmed);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      } else {
+        hashHex = jsSha256(trimmed);
+      }
       if (hashHex === SUPPORTER_HASH) {
         setSupporterBadge(true);
         setBadgeMessage({ type: 'success', text: '🎉 Supporter badge activated! Thank you for your support!' });
