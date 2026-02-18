@@ -206,6 +206,10 @@ export function FlightList({
   const [bulkTagInput, setBulkTagInput] = useState('');
   const [isBulkTagging, setIsBulkTagging] = useState(false);
   const [bulkTagProgress, setBulkTagProgress] = useState({ done: 0, total: 0 });
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flightId: number } | null>(null);
+  const [contextExportSubmenuOpen, setContextExportSubmenuOpen] = useState(false);
+  const [isRegeneratingTags, setIsRegeneratingTags] = useState(false);
   const dateButtonRef = useRef<HTMLButtonElement | null>(null);
   const sortButtonRef = useRef<HTMLButtonElement | null>(null);
   const sortDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -243,6 +247,21 @@ export function FlightList({
       };
     }
   }, [isExporting, isDeleting, isUntagging, isBulkTagging]);
+
+  // Close context menu on click outside or scroll
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handleClose = () => {
+      setContextMenu(null);
+      setContextExportSubmenuOpen(false);
+    };
+    document.addEventListener('click', handleClose);
+    document.addEventListener('scroll', handleClose, true);
+    return () => {
+      document.removeEventListener('click', handleClose);
+      document.removeEventListener('scroll', handleClose, true);
+    };
+  }, [contextMenu]);
 
   // Sync filtered flight IDs to the store so Overview can use them
   // Only sync after flights have loaded to avoid setting an empty Set prematurely
@@ -1285,6 +1304,91 @@ ${points}
     }
   };
 
+  // Context menu handler for right-click on flight items
+  const handleContextMenu = (e: React.MouseEvent, flightId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, flightId });
+    setContextExportSubmenuOpen(false);
+  };
+
+  // Handle single flight export from context menu
+  const handleContextExport = async (flightId: number, format: 'csv' | 'json' | 'gpx' | 'kml') => {
+    setContextMenu(null);
+    setContextExportSubmenuOpen(false);
+    
+    const flight = flights.find(f => f.id === flightId);
+    if (!flight) return;
+
+    try {
+      const data = await api.getFlightData(flightId);
+      if (!data) return;
+
+      let content = '';
+      let extension = format;
+      
+      if (format === 'csv') content = buildCsv(data);
+      else if (format === 'json') content = buildJson(data);
+      else if (format === 'gpx') content = buildGpx(data);
+      else if (format === 'kml') content = buildKml(data);
+
+      if (!content) return;
+
+      const baseName = sanitizeFileName(flight.displayName || flight.fileName || 'flight');
+      const filename = `${baseName}.${extension}`;
+
+      if (isWebMode()) {
+        downloadFile(filename, content);
+      } else {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+        const filePath = await save({
+          defaultPath: filename,
+          filters: [{ name: format.toUpperCase(), extensions: [extension] }],
+        });
+        if (!filePath) return;
+        await writeTextFile(filePath, content);
+      }
+    } catch (err) {
+      console.error('Export failed:', err);
+    }
+  };
+
+  // Handle regenerate smart tags for a single flight from context menu
+  const handleContextRegenerateTags = async (flightId: number) => {
+    setContextMenu(null);
+    setIsRegeneratingTags(true);
+    try {
+      const enabledTagTypes = api.getEnabledSmartTagTypes();
+      await api.regenerateFlightSmartTags(flightId, enabledTagTypes);
+      // Refresh flights and tags
+      await useFlightStore.getState().loadFlights();
+      await loadAllTags();
+      clearFlightDataCache();
+    } catch (err) {
+      console.error('Regenerate smart tags failed:', err);
+    } finally {
+      setIsRegeneratingTags(false);
+    }
+  };
+
+  // Handle rename from context menu
+  const handleContextRename = (flightId: number) => {
+    setContextMenu(null);
+    const flight = flights.find(f => f.id === flightId);
+    if (flight) {
+      setEditingId(flightId);
+      setDraftName(flight.displayName || flight.fileName);
+      setConfirmDeleteId(null);
+    }
+  };
+
+  // Handle delete from context menu
+  const handleContextDelete = (flightId: number) => {
+    setContextMenu(null);
+    setConfirmDeleteId(flightId);
+  };
+
   if (flights.length === 0) {
     return (
       <div className="p-4 text-center text-gray-500">
@@ -2318,6 +2422,7 @@ ${points}
         <div
           key={flight.id}
           data-flight-id={flight.id}
+          onContextMenu={(e) => handleContextMenu(e, flight.id)}
           onClick={() => {
             setPreviewFlightId(null);
             if (activeView === 'overview') {
@@ -2489,6 +2594,136 @@ ${points}
         </div>
       )}
       </div>
+
+      {/* Right-click Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-[9999] min-w-[180px] py-1 rounded-lg border border-gray-700 bg-drone-surface shadow-xl"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 200),
+            top: Math.min(contextMenu.y, window.innerHeight - 250),
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Rename */}
+          <button
+            type="button"
+            onClick={() => handleContextRename(contextMenu.flightId)}
+            className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700/50 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            Rename
+          </button>
+
+          {/* Delete */}
+          <button
+            type="button"
+            onClick={() => handleContextDelete(contextMenu.flightId)}
+            className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700/50 flex items-center gap-2"
+          >
+            <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            Delete
+          </button>
+
+          {/* Divider */}
+          <div className="my-1 border-t border-gray-700" />
+
+          {/* Regenerate Smart Tags */}
+          <button
+            type="button"
+            onClick={() => handleContextRegenerateTags(contextMenu.flightId)}
+            disabled={isRegeneratingTags}
+            className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700/50 flex items-center gap-2 disabled:opacity-50"
+          >
+            <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Regenerate Smart Tags
+          </button>
+
+          {/* Divider */}
+          <div className="my-1 border-t border-gray-700" />
+
+          {/* Export submenu */}
+          <div
+            className="relative"
+            onMouseEnter={() => setContextExportSubmenuOpen(true)}
+            onMouseLeave={() => setContextExportSubmenuOpen(false)}
+          >
+            <button
+              type="button"
+              className="w-full px-3 py-2 text-left text-sm text-gray-300 hover:bg-gray-700/50 flex items-center justify-between"
+            >
+              <span className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Export
+              </span>
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+
+            {/* Export submenu */}
+            {contextExportSubmenuOpen && (
+              <div
+                className="absolute left-full top-0 ml-1 min-w-[120px] py-1 rounded-lg border border-gray-700 bg-drone-surface shadow-xl"
+                style={{
+                  // Flip to left side if not enough space on right
+                  ...(contextMenu.x > window.innerWidth - 320 ? { left: 'auto', right: '100%', marginLeft: 0, marginRight: '4px' } : {}),
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleContextExport(contextMenu.flightId, 'csv')}
+                  className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700/50"
+                >
+                  CSV
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleContextExport(contextMenu.flightId, 'json')}
+                  className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700/50"
+                >
+                  JSON
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleContextExport(contextMenu.flightId, 'gpx')}
+                  className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700/50"
+                >
+                  GPX
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleContextExport(contextMenu.flightId, 'kml')}
+                  className="w-full px-3 py-1.5 text-left text-sm text-gray-300 hover:bg-gray-700/50"
+                >
+                  KML
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Regenerating Tags Overlay */}
+      {isRegeneratingTags && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-drone-surface border border-gray-700 rounded-xl p-6 min-w-[280px] shadow-2xl text-center">
+            <svg className="w-8 h-8 text-teal-400 animate-spin mx-auto mb-3" fill="none" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75" />
+            </svg>
+            <p className="text-sm text-gray-300">Regenerating smart tags...</p>
+          </div>
+        </div>
+      )}
 
       {/* Export Progress Overlay */}
       {isExporting && (
