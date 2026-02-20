@@ -744,12 +744,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 </span>
               </button>
               {supporterBadgeActive && (
-                <p className="text-xs text-amber-400/80 mt-1">Locked — supporter badge is active.</p>
+                <p className="text-xs text-amber-400/80 mt-1">Locked - supporter badge is active.</p>
               )}
 
               {/* Supporter Badge Button */}
               <p className="mt-3 text-xs text-gray-500 leading-relaxed">
-                Show your love by supporting this project — your donation keeps development running and new features coming.
+                Show your love by supporting this project - your donation keeps development running and new features coming.
               </p>
               <button
                 type="button"

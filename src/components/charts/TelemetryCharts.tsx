@@ -345,6 +345,8 @@ function createBaseChartConfig(theme: 'dark' | 'light'): Partial<EChartsOption> 
     tooltip: {
       trigger: 'axis',
       renderMode: 'html',
+      appendToBody: true,
+      extraCssText: 'z-index: 40;',
       backgroundColor: isLight ? '#ffffff' : '#16213e',
       borderColor: isLight ? '#e2e8f0' : '#4a4e69',
       textStyle: {
