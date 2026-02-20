@@ -191,7 +191,7 @@
     "config": {
       "env": ".env (DJI API key via env var)",
       "local_config": "config.json (API key stored locally)",
-      "context_file": ".context (machine-readable project context, gitignored)"
+      "context_file": "context.json (machine-readable project context, gitignored)"
     }
   },
   "data_flow": {
